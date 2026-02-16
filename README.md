@@ -1,36 +1,99 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Tết Connect
 
-## Getting Started
+Tết Connect là một web application giúp các gia đình Việt Nam tổ chức và kết nối trong dịp Tết Nguyên Đán. Ứng dụng cung cấp một không gian riêng tư, ấm cúng để gia đình lưu giữ khoảnh khắc, tổ chức gặp mặt, và tạo nội dung Tết độc đáo bằng AI.
 
-First, run the development server:
+## Tính năng chính
 
+- 🎋 **Tạo câu đối & lời chúc Tết bằng AI**: Sử dụng Gemini AI để tạo nội dung Tết độc đáo
+- 📅 **Quản lý lịch họp mặt**: Tổ chức sự kiện và phân công công việc cho thành viên
+- 📸 **Album ảnh gia đình**: Upload và chia sẻ ảnh Tết với timeline
+- 🎬 **Video recap tự động**: Tạo video tổng hợp ảnh với nhạc nền
+- 💬 **Tương tác realtime**: Reactions và cập nhật tức thời
+- 🔐 **Đăng nhập Google OAuth**: Xác thực nhanh chóng và an toàn
+
+## Tech Stack
+
+- **Frontend**: Next.js 14 (App Router), React, TypeScript
+- **Styling**: Tailwind CSS, Shadcn/ui
+- **Backend**: Supabase (PostgreSQL, Auth, Storage, Realtime)
+- **AI**: Google Gemini API
+- **Deployment**: Vercel
+
+## Cài đặt
+
+1. Clone repository:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone <repository-url>
+cd tet-connect
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. Cài đặt dependencies:
+```bash
+npm install
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3. Cấu hình environment variables:
+```bash
+cp .env.local.example .env.local
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Cập nhật các giá trị trong `.env.local`:
+- `NEXT_PUBLIC_SUPABASE_URL`: URL của Supabase project
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Anon key của Supabase
+- `GEMINI_API_KEY`: API key của Google Gemini
 
-## Learn More
+4. Chạy development server:
+```bash
+npm run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+Mở [http://localhost:3000](http://localhost:3000) để xem ứng dụng.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Cấu trúc thư mục
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+├── app/                 # Next.js App Router pages
+├── components/          # React components
+├── lib/                 # Utility functions và configurations
+│   ├── supabase.ts     # Supabase client
+│   └── utils.ts        # Helper functions
+├── types/              # TypeScript type definitions
+│   └── database.ts     # Database schema types
+├── public/             # Static assets
+└── .kiro/              # Spec documents
+    └── specs/
+        └── tet-connect/
+            ├── requirements.md
+            ├── design.md
+            └── tasks.md
+```
 
-## Deploy on Vercel
+## Database Setup
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Xem file `.kiro/specs/tet-connect/design.md` để biết chi tiết về database schema và RLS policies.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Testing
+
+```bash
+# Chạy tất cả tests
+npm run test
+
+# Chạy với coverage
+npm run test:coverage
+
+# Watch mode
+npm run test:watch
+```
+
+## Deployment
+
+Ứng dụng được thiết kế để deploy lên Vercel:
+
+1. Push code lên GitHub
+2. Import project vào Vercel
+3. Cấu hình environment variables
+4. Deploy!
+
+## License
+
+MIT
