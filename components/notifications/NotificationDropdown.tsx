@@ -2,11 +2,13 @@
 
 import { formatDistanceToNow } from 'date-fns'
 import { vi } from 'date-fns/locale'
-import { X, Calendar, CheckCircle } from 'lucide-react'
+import { X, Calendar, CheckCircle, Bell } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import type { Notification } from '@/types/database'
 import { useEffect, useRef } from 'react'
+import { NotificationSkeleton } from '@/components/skeletons/NotificationSkeleton'
+import { EmptyState } from '@/components/ui/empty-state'
 
 interface NotificationDropdownProps {
   notifications: Notification[]
@@ -65,13 +67,18 @@ export function NotificationDropdown({
         </CardHeader>
         <CardContent className="max-h-[400px] overflow-y-auto">
           {loading ? (
-            <div className="text-center py-8 text-muted-foreground">
-              Đang tải...
+            <div className="space-y-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <NotificationSkeleton key={i} />
+              ))}
             </div>
           ) : notifications.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              Không có thông báo mới
-            </div>
+            <EmptyState
+              icon={Bell}
+              title="Không có thông báo mới"
+              description="Bạn sẽ nhận được thông báo về sự kiện và công việc tại đây"
+              className="py-6"
+            />
           ) : (
             <div className="space-y-2">
               {notifications.map((notification) => {

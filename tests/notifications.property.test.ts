@@ -8,17 +8,24 @@ const isIntegrationTest = process.env.RUN_INTEGRATION_TESTS === 'true' &&
   process.env.NEXT_PUBLIC_SUPABASE_URL &&
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-const supabaseClient = isIntegrationTest ? createSupabaseClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-) : null as any
+function getSupabaseClient() {
+  if (!isIntegrationTest) {
+    throw new Error('Integration tests are not configured')
+  }
+  return createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  )
+}
 
-describe.skipIf(!isIntegrationTest)('Notifications Property Tests', () => {
+const describeOrSkip = isIntegrationTest ? describe : describe.skip
+
+describeOrSkip('Notifications Property Tests', () => {
   let testUserId: string
   let testFamilyId: string
 
   beforeEach(async () => {
-    const supabase = supabaseClient
+    const supabase = getSupabaseClient()
     
     // Create test user
     const { data: userData } = await supabase.auth.signInAnonymously()
@@ -53,7 +60,7 @@ describe.skipIf(!isIntegrationTest)('Notifications Property Tests', () => {
   })
 
   afterEach(async () => {
-    const supabase = supabaseClient
+    const supabase = getSupabaseClient()
     // Cleanup
     if (testFamilyId) {
       await supabase.from('notifications').delete().eq('user_id', testUserId)
@@ -72,7 +79,7 @@ describe.skipIf(!isIntegrationTest)('Notifications Property Tests', () => {
     // Feature: tet-connect, Property 16: Event Reminder for All Members
     // **Validates: Requirements 9.1**
     
-    const supabase = supabaseClient
+    const supabase = getSupabaseClient()
     
     await fc.assert(
       fc.asyncProperty(
@@ -168,7 +175,7 @@ describe.skipIf(!isIntegrationTest)('Notifications Property Tests', () => {
     // Feature: tet-connect, Property 17: Task Reminder for Assignee
     // **Validates: Requirements 9.2**
     
-    const supabase = supabaseClient
+    const supabase = getSupabaseClient()
     
     await fc.assert(
       fc.asyncProperty(
@@ -251,7 +258,7 @@ describe.skipIf(!isIntegrationTest)('Notifications Property Tests', () => {
     // Feature: tet-connect, Property 18: Notification Persistence
     // **Validates: Requirements 9.3**
     
-    const supabase = supabaseClient
+    const supabase = getSupabaseClient()
     
     await fc.assert(
       fc.asyncProperty(

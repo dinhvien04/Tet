@@ -49,37 +49,37 @@ export function EventCard({ event, onClick }: EventCardProps) {
       onClick={handleClick}
     >
       <CardHeader>
-        <CardTitle className="flex items-start justify-between">
-          <span className="text-lg">{event.title}</span>
+        <CardTitle className="flex items-start justify-between gap-2">
+          <span className="text-base md:text-lg line-clamp-2">{event.title}</span>
           {isUpcoming && (
-            <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">
+            <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full whitespace-nowrap flex-shrink-0">
               Sắp tới
             </span>
           )}
           {isPast && (
-            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full">
+            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full whitespace-nowrap flex-shrink-0">
               Đã qua
             </span>
           )}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
-        <div className="flex items-center gap-2 text-sm text-gray-600">
-          <Calendar className="w-4 h-4" />
-          <span>{formattedDate} lúc {formattedTime}</span>
+        <div className="flex items-start gap-2 text-xs md:text-sm text-gray-600">
+          <Calendar className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span className="break-words">{formattedDate} lúc {formattedTime}</span>
         </div>
         
         {event.location && (
-          <div className="flex items-center gap-2 text-sm text-gray-600">
-            <MapPin className="w-4 h-4" />
-            <span>{event.location}</span>
+          <div className="flex items-start gap-2 text-xs md:text-sm text-gray-600">
+            <MapPin className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <span className="break-words">{event.location}</span>
           </div>
         )}
 
         {event.users && (
-          <div className="flex items-center gap-2 text-sm text-gray-500 mt-3">
-            <User className="w-4 h-4" />
-            <span>Tạo bởi {event.users.name}</span>
+          <div className="flex items-center gap-2 text-xs md:text-sm text-gray-500 mt-3">
+            <User className="w-4 h-4 flex-shrink-0" />
+            <span className="truncate">Tạo bởi {event.users.name}</span>
           </div>
         )}
       </CardContent>

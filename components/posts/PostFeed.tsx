@@ -1,9 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase'
 import { PostCard, Post } from './PostCard'
-import { Loader2 } from 'lucide-react'
+import { PostCardSkeleton } from '@/components/skeletons/PostCardSkeleton'
+import { toast } from 'sonner'
+import { useRealtimeWithFallback } from '@/lib/hooks/useRealtimeWithFallback'
+import { RealtimeStatusIndicator } from '@/components/ui/offline-indicator'
+import { EmptyState } from '@/components/ui/empty-state'
+import { MessageSquare } from 'lucide-react'
 
 interface PostFeedProps {
   familyId: string
@@ -15,48 +20,79 @@ export function PostFeed({ familyId }: PostFeedProps) {
   const [error, setError] = useState<string | null>(null)
   const supabase = createClient()
 
-  useEffect(() => {
-    fetchPosts()
-    
-    // Subscribe to realtime updates
-    const channel = supabase
-      .channel(`family:${familyId}:posts`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'posts',
-          filter: `family_id=eq.${familyId}`
-        },
-        async (payload) => {
-          // Fetch the complete post with user info
-          const { data: newPost } = await supabase
-            .from('posts')
-            .select(`
-              *,
-              users (
-                id,
-                name,
-                avatar,
-                email
-              )
-            `)
-            .eq('id', payload.new.id)
-            .single()
+  const fetchPosts = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/posts?familyId=${familyId}`)
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch posts')
+      }
 
-          if (newPost) {
-            setPosts(prevPosts => [
-              {
-                ...newPost,
-                reactions: { heart: 0, haha: 0 },
-                userReaction: null
-              },
-              ...prevPosts
-            ])
-          }
-        }
-      )
+      const data = await response.json()
+      setPosts(data)
+      return data
+    } catch (err) {
+      console.error('Error fetching posts:', err)
+      throw err
+    }
+  }, [familyId])
+
+  // Initial load
+  useEffect(() => {
+    const loadPosts = async () => {
+      try {
+        setLoading(true)
+        setError(null)
+        await fetchPosts()
+      } catch (err) {
+        setError('Không thể tải bài đăng. Vui lòng thử lại.')
+      } finally {
+        setLoading(false)
+      }
+    }
+    
+    loadPosts()
+  }, [fetchPosts])
+
+  // Setup realtime with fallback polling for posts
+  const realtimeStatus = useRealtimeWithFallback({
+    channelName: `family:${familyId}:posts`,
+    table: 'posts',
+    filter: `family_id=eq.${familyId}`,
+    fetchData: fetchPosts,
+    onInsert: async (payload) => {
+      // Fetch the complete post with user info
+      const { data: newPost } = await supabase
+        .from('posts')
+        .select(`
+          *,
+          users (
+            id,
+            name,
+            avatar,
+            email
+          )
+        `)
+        .eq('id', payload.new.id)
+        .single()
+
+      if (newPost) {
+        setPosts(prevPosts => [
+          {
+            ...newPost,
+            reactions: { heart: 0, haha: 0 },
+            userReaction: null
+          },
+          ...prevPosts
+        ])
+      }
+    },
+  })
+
+  // Setup separate realtime subscription for reactions
+  useEffect(() => {
+    const channel = supabase
+      .channel(`family:${familyId}:reactions`)
       .on(
         'postgres_changes',
         {
@@ -65,7 +101,6 @@ export function PostFeed({ familyId }: PostFeedProps) {
           table: 'reactions'
         },
         (payload: any) => {
-          // Update reaction counts when new reactions are added
           setPosts(prevPosts =>
             prevPosts.map(post => {
               if (post.id === payload.new.post_id) {
@@ -92,7 +127,6 @@ export function PostFeed({ familyId }: PostFeedProps) {
           table: 'reactions'
         },
         (payload: any) => {
-          // Update reaction counts when reactions are removed
           setPosts(prevPosts =>
             prevPosts.map(post => {
               if (post.id === payload.old.post_id) {
@@ -119,7 +153,6 @@ export function PostFeed({ familyId }: PostFeedProps) {
           table: 'reactions'
         },
         (payload: any) => {
-          // Update reaction counts when reactions are changed
           setPosts(prevPosts =>
             prevPosts.map(post => {
               if (post.id === payload.new.post_id) {
@@ -143,32 +176,10 @@ export function PostFeed({ familyId }: PostFeedProps) {
       )
       .subscribe()
 
-    // Cleanup subscription on unmount
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [familyId])
-
-  const fetchPosts = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-
-      const response = await fetch(`/api/posts?familyId=${familyId}`)
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch posts')
-      }
-
-      const data = await response.json()
-      setPosts(data)
-    } catch (err) {
-      console.error('Error fetching posts:', err)
-      setError('Không thể tải bài đăng. Vui lòng thử lại.')
-    } finally {
-      setLoading(false)
-    }
-  }
+  }, [familyId, supabase])
 
   const handleReaction = async (postId: string, type: 'heart' | 'haha') => {
     try {
@@ -193,7 +204,6 @@ export function PostFeed({ familyId }: PostFeedProps) {
             const reactions = post.reactions ? { ...post.reactions } : { heart: 0, haha: 0 }
             
             if (result.action === 'removed') {
-              // Remove reaction
               reactions[type] = Math.max(0, (reactions[type] || 0) - 1)
               return {
                 ...post,
@@ -201,7 +211,6 @@ export function PostFeed({ familyId }: PostFeedProps) {
                 userReaction: null
               }
             } else if (result.action === 'updated') {
-              // Switch reaction type
               const oldType = post.userReaction
               if (oldType) {
                 reactions[oldType] = Math.max(0, (reactions[oldType] || 0) - 1)
@@ -213,7 +222,6 @@ export function PostFeed({ familyId }: PostFeedProps) {
                 userReaction: type
               }
             } else {
-              // Add new reaction
               reactions[type] = (reactions[type] || 0) + 1
               return {
                 ...post,
@@ -227,13 +235,16 @@ export function PostFeed({ familyId }: PostFeedProps) {
       )
     } catch (err) {
       console.error('Error adding reaction:', err)
+      toast.error('Không thể thêm reaction. Vui lòng thử lại.')
     }
   }
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      <div className="space-y-4">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <PostCardSkeleton key={i} />
+        ))}
       </div>
     )
   }
@@ -243,7 +254,7 @@ export function PostFeed({ familyId }: PostFeedProps) {
       <div className="text-center py-12">
         <p className="text-destructive mb-4">{error}</p>
         <button
-          onClick={fetchPosts}
+          onClick={() => fetchPosts()}
           className="text-sm text-primary hover:underline"
         >
           Thử lại
@@ -254,16 +265,23 @@ export function PostFeed({ familyId }: PostFeedProps) {
 
   if (posts.length === 0) {
     return (
-      <div className="text-center py-12">
-        <p className="text-muted-foreground">
-          Chưa có bài đăng nào. Hãy tạo bài đăng đầu tiên!
-        </p>
-      </div>
+      <EmptyState
+        icon={MessageSquare}
+        title="Chưa có bài đăng nào"
+        description="Hãy tạo bài đăng đầu tiên để chia sẻ với gia đình!"
+      />
     )
   }
 
   return (
     <div className="space-y-4">
+      {realtimeStatus.isPolling && (
+        <RealtimeStatusIndicator
+          isConnected={realtimeStatus.isConnected}
+          isPolling={realtimeStatus.isPolling}
+        />
+      )}
+      
       {posts.map(post => (
         <PostCard key={post.id} post={post} onReaction={handleReaction} />
       ))}

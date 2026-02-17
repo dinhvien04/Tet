@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react'
 import { EventTask } from '@/types/database'
 import { TaskItem } from './TaskItem'
 import { toast } from 'sonner'
+import { EmptyState } from '@/components/ui/empty-state'
+import { CheckSquare } from 'lucide-react'
 
 interface TaskListProps {
   eventId: string
@@ -47,9 +49,12 @@ export function TaskList({ eventId, currentUserId, refreshTrigger }: TaskListPro
 
   if (tasks.length === 0) {
     return (
-      <div className="text-center py-6 text-gray-500 text-sm">
-        Chưa có công việc nào
-      </div>
+      <EmptyState
+        icon={CheckSquare}
+        title="Chưa có công việc nào"
+        description="Thêm công việc để phân công cho các thành viên"
+        className="py-6"
+      />
     )
   }
 

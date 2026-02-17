@@ -2,7 +2,13 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/components/auth/AuthProvider";
+import { FamilyProvider } from "@/components/family/FamilyContext";
 import { Toaster } from "@/components/ui/sonner";
+import { SWRProvider } from "@/components/providers/SWRProvider";
+import { NetworkStatus } from "@/components/ui/NetworkStatus";
+import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
+import { ErrorBoundary } from "@/components/errors/ErrorBoundary";
+import { GlobalErrorHandler } from "@/components/errors/GlobalErrorHandler";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -31,10 +37,19 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <AuthProvider>
-          {children}
-        </AuthProvider>
+        <GlobalErrorHandler />
+        <ErrorBoundary>
+          <SWRProvider>
+            <AuthProvider>
+              <FamilyProvider>
+                {children}
+              </FamilyProvider>
+            </AuthProvider>
+          </SWRProvider>
+        </ErrorBoundary>
         <Toaster />
+        <NetworkStatus />
+        <ServiceWorkerRegistration />
       </body>
     </html>
   );

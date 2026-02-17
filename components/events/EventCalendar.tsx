@@ -5,7 +5,7 @@ import { Event } from '@/types/database'
 import { EventCard } from './EventCard'
 import { CreateEventForm } from './CreateEventForm'
 import { Button } from '@/components/ui/button'
-import { Plus } from 'lucide-react'
+import { Plus, Calendar } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -14,6 +14,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
+import { EmptyState } from '@/components/ui/empty-state'
 
 interface EventCalendarProps {
   familyId: string
@@ -83,10 +84,15 @@ export function EventCalendar({ familyId }: EventCalendarProps) {
       </div>
 
       {events.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          <p>Chưa có sự kiện nào</p>
-          <p className="text-sm mt-2">Tạo sự kiện đầu tiên cho gia đình bạn!</p>
-        </div>
+        <EmptyState
+          icon={Calendar}
+          title="Chưa có sự kiện nào"
+          description="Tạo sự kiện đầu tiên cho gia đình bạn!"
+          action={{
+            label: 'Tạo sự kiện',
+            onClick: () => setIsDialogOpen(true)
+          }}
+        />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {events.map((event) => (

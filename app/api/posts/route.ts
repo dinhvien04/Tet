@@ -96,6 +96,8 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url)
     const familyId = searchParams.get('familyId')
+    const from = parseInt(searchParams.get('from') || '0')
+    const to = parseInt(searchParams.get('to') || '9')
 
     if (!familyId) {
       return NextResponse.json(
@@ -119,7 +121,7 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Get posts with user info and reaction counts
+    // Get posts with user info and reaction counts (with pagination)
     const { data: posts, error: postsError } = await supabase
       .from('posts')
       .select(`
@@ -133,6 +135,7 @@ export async function GET(request: NextRequest) {
       `)
       .eq('family_id', familyId)
       .order('created_at', { ascending: false })
+      .range(from, to)
 
     if (postsError) {
       console.error('Error fetching posts:', postsError)

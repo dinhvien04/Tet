@@ -1,1 +1,3 @@
-export { AIContentForm } from './AIContentForm';
+export { AIContentForm } from './AIContentForm'
+export { AIContentFormLazy } from './AIContentFormLazy'
+

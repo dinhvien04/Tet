@@ -6,6 +6,7 @@ import { Heart, Laugh } from 'lucide-react'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import { toast } from 'sonner'
 
 export interface Post {
   id: string
@@ -56,19 +57,19 @@ export function PostCard({ post, onReaction }: PostCardProps) {
 
   return (
     <Card className="w-full">
-      <CardHeader className="flex flex-row items-center gap-4 pb-3">
-        <Avatar>
+      <CardHeader className="flex flex-row items-center gap-3 md:gap-4 pb-3">
+        <Avatar className="h-10 w-10 md:h-12 md:w-12">
           <AvatarImage src={post.users.avatar || undefined} alt={post.users.name} />
           <AvatarFallback>{getInitials(post.users.name)}</AvatarFallback>
         </Avatar>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <h3 className="font-semibold">{post.users.name}</h3>
-            <span className="text-xs text-muted-foreground">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="font-semibold text-sm md:text-base truncate">{post.users.name}</h3>
+            <span className="text-xs text-muted-foreground whitespace-nowrap">
               {POST_TYPE_LABELS[post.type]}
             </span>
           </div>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-xs md:text-sm text-muted-foreground">
             {formatDistanceToNow(new Date(post.created_at), {
               addSuffix: true,
               locale: vi
@@ -77,7 +78,7 @@ export function PostCard({ post, onReaction }: PostCardProps) {
         </div>
       </CardHeader>
       <CardContent>
-        <div className="whitespace-pre-wrap text-base mb-4">
+        <div className="whitespace-pre-wrap text-sm md:text-base mb-4 break-words">
           {post.content}
         </div>
         
@@ -86,7 +87,7 @@ export function PostCard({ post, onReaction }: PostCardProps) {
             variant={post.userReaction === 'heart' ? 'default' : 'ghost'}
             size="sm"
             onClick={() => handleReaction('heart')}
-            className="gap-1"
+            className="gap-1 text-xs md:text-sm"
           >
             <Heart className={`h-4 w-4 ${post.userReaction === 'heart' ? 'fill-current' : ''}`} />
             {post.reactions && post.reactions.heart > 0 && (
@@ -98,7 +99,7 @@ export function PostCard({ post, onReaction }: PostCardProps) {
             variant={post.userReaction === 'haha' ? 'default' : 'ghost'}
             size="sm"
             onClick={() => handleReaction('haha')}
-            className="gap-1"
+            className="gap-1 text-xs md:text-sm"
           >
             <Laugh className={`h-4 w-4 ${post.userReaction === 'haha' ? 'fill-current' : ''}`} />
             {post.reactions && post.reactions.haha > 0 && (

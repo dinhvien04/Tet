@@ -268,53 +268,53 @@ Tech stack: Next.js 14 (App Router), TypeScript, Tailwind CSS, Shadcn/ui, Supaba
   - Kiểm tra notifications được tạo đúng
   - Hỏi người dùng nếu có thắc mắc
 
-- [ ] 12. Xây dựng Photo Album Module
-  - [-] 12.1 Implement photo upload
+- [x] 12. Xây dựng Photo Album Module
+  - [x] 12.1 Implement photo upload
     - Tạo API route POST /api/photos/upload
     - Implement file validation (type, size)
     - Upload file lên Supabase Storage
     - Lưu metadata vào database
     - _Requirements: 10.2, 10.3, 10.4, 10.5_
   
-  - [ ] 12.2 Viết property tests cho photo upload
+  - [x] 12.2 Viết property tests cho photo upload
     - **Property 21: Photo File Validation**
     - **Property 22: Photo Upload and Persistence**
     - **Validates: Requirements 10.3, 10.4, 10.5, 10.7**
   
-  - [ ] 12.3 Tạo UI upload ảnh
+  - [x] 12.3 Tạo UI upload ảnh
     - Tạo component PhotoUploader với drag & drop
     - Support file picker và camera (mobile)
     - Hiển thị upload progress
     - Hiển thị error messages
     - _Requirements: 10.1, 10.2, 10.7, 14.4_
   
-  - [ ] 12.4 Tạo UI hiển thị album
+  - [x] 12.4 Tạo UI hiển thị album
     - Tạo API route GET /api/photos?familyId=:id
     - Tạo component PhotoGrid responsive
     - Tạo component PhotoTimeline nhóm theo ngày
     - Implement lazy loading cho ảnh
     - _Requirements: 10.6, 11.1, 11.2, 15.2_
   
-  - [ ] 12.5 Viết property tests cho photo display
+  - [x] 12.5 Viết property tests cho photo display
     - **Property 23: Photo Timeline Ordering**
     - **Property 24: Photo Grouping by Date**
     - **Validates: Requirements 10.6, 11.1, 11.2**
   
-  - [ ] 12.6 Tạo photo viewer
+  - [x] 12.6 Tạo photo viewer
     - Tạo component PhotoViewer (lightbox)
     - Hiển thị metadata (uploader, time)
     - Navigation prev/next
     - _Requirements: 11.3, 11.4, 11.5_
   
-  - [ ] 12.7 Viết unit tests cho photo module
+  - [x] 12.7 Viết unit tests cho photo module
     - Test file validation
     - Test upload progress
     - Test photo grid rendering
     - Test lightbox navigation
     - _Requirements: 10.3, 10.7, 11.3, 11.5_
 
-- [ ] 13. Xây dựng Video Recap Module
-  - [ ] 13.1 Implement video creation với Canvas API
+- [x] 13. Xây dựng Video Recap Module
+  - [x] 13.1 Implement video creation với Canvas API
     - Tạo API route POST /api/videos/create
     - Implement Canvas-based video rendering
     - Thêm fade in/out transitions
@@ -322,11 +322,11 @@ Tech stack: Next.js 14 (App Router), TypeScript, Tailwind CSS, Shadcn/ui, Supaba
     - Upload video lên Supabase Storage
     - _Requirements: 12.3, 12.4, 12.5, 12.6_
   
-  - [ ] 13.2 Viết property test cho video creation
+  - [x] 13.2 Viết property test cho video creation
     - **Property 25: Video Creation Pipeline**
     - **Validates: Requirements 12.3, 12.5, 12.6, 12.8**
   
-  - [ ] 13.3 Tạo UI tạo video
+  - [x] 13.3 Tạo UI tạo video
     - Tạo component VideoRecapButton
     - Tạo component PhotoSelector (chọn ảnh cho video)
     - Hiển thị processing status
@@ -334,104 +334,104 @@ Tech stack: Next.js 14 (App Router), TypeScript, Tailwind CSS, Shadcn/ui, Supaba
     - Nút download video
     - _Requirements: 12.1, 12.2, 12.7_
   
-  - [ ] 13.4 Implement error handling cho video
+  - [x] 13.4 Implement error handling cho video
     - Xử lý browser không support MediaRecorder
     - Giới hạn số ảnh (max 50)
     - Xử lý memory errors
     - Hiển thị error và retry button
     - _Requirements: 12.8_
   
-  - [ ] 13.5 Viết unit tests cho video module
+  - [x] 13.5 Viết unit tests cho video module
     - Test photo selection
     - Test processing status
     - Test error handling
     - _Requirements: 12.2, 12.8_
 
-- [ ] 14. Checkpoint - Kiểm tra Photos và Videos
+- [x] 14. Checkpoint - Kiểm tra Photos và Videos
   - Đảm bảo upload ảnh hoạt động
   - Kiểm tra tạo video recap
   - Hỏi người dùng nếu có thắc mắc
 
 - [ ] 15. Implement Responsive Design
-  - [ ] 15.1 Tối ưu layout cho mobile
+  - [x] 15.1 Tối ưu layout cho mobile
     - Implement responsive breakpoints với Tailwind
     - Ẩn sidebar trên mobile, hiển thị hamburger menu
     - Điều chỉnh kích thước ảnh và cards
     - Test trên các screen sizes khác nhau
     - _Requirements: 14.1, 14.2, 14.3_
   
-  - [ ] 15.2 Tối ưu interactions cho mobile
+  - [x] 15.2 Tối ưu interactions cho mobile
     - Touch-friendly button sizes
     - Swipe gestures cho photo viewer
     - Mobile camera access cho photo upload
     - _Requirements: 14.4_
   
-  - [ ] 15.3 Viết unit tests cho responsive
+  - [x] 15.3 Viết unit tests cho responsive
     - Test mobile menu
     - Test responsive layout
     - Test camera access
     - _Requirements: 14.1, 14.2, 14.4_
 
 - [ ] 16. Performance Optimization
-  - [ ] 16.1 Implement lazy loading và code splitting
+  - [x] 16.1 Implement lazy loading và code splitting
     - Next.js dynamic imports cho heavy components
     - Lazy load images với next/image
     - Implement infinite scroll cho posts và photos
     - _Requirements: 15.2, 15.3_
   
-  - [ ] 16.2 Optimize loading states
+  - [x] 16.2 Optimize loading states
     - Skeleton loaders cho tất cả components
     - Loading spinners cho async operations
     - Optimistic UI updates
     - _Requirements: 15.1, 15.4_
   
-  - [ ] 16.3 Implement caching strategies
+  - [x] 16.3 Implement caching strategies
     - SWR hoặc React Query cho data fetching
     - Cache Supabase queries
     - Service Worker cho offline support (optional)
     - _Requirements: 15.1_
 
 - [ ] 17. Tạo Dashboard và Navigation
-  - [ ] 17.1 Tạo layout chính
+  - [x] 17.1 Tạo layout chính
     - Tạo app layout với sidebar/header
     - Implement navigation menu
     - Hiển thị family selector nếu user thuộc nhiều nhà
     - _Requirements: Tất cả_
   
-  - [ ] 17.2 Tạo dashboard page
+  - [x] 17.2 Tạo dashboard page
     - Hiển thị recent posts
     - Hiển thị upcoming events
     - Hiển thị recent photos
     - Quick actions (tạo post, tạo event, upload ảnh)
     - _Requirements: Tất cả_
   
-  - [ ] 17.3 Viết unit tests cho dashboard
+  - [x] 17.3 Viết unit tests cho dashboard
     - Test layout rendering
     - Test navigation
     - Test quick actions
     - _Requirements: Tất cả_
 
-- [ ] 18. Error Handling và User Feedback
-  - [ ] 18.1 Implement global error handling
+- [x] 18. Error Handling và User Feedback
+  - [x] 18.1 Implement global error handling
     - Error boundary cho React components
     - Global error handler cho API calls
     - Retry logic với exponential backoff
     - _Requirements: Tất cả (error handling)_
   
-  - [ ] 18.2 Implement toast notifications
+  - [x] 18.2 Implement toast notifications
     - Success messages
     - Error messages
     - Info messages
     - _Requirements: Tất cả (user feedback)_
   
-  - [ ] 18.3 Implement fallback UI
+  - [x] 18.3 Implement fallback UI
     - Fallback polling khi Realtime fails
     - Offline indicators
     - Empty states cho lists
     - _Requirements: 13.4, 15.1_
 
 - [ ] 19. Testing và Quality Assurance
-  - [ ] 19.1 Chạy tất cả property tests
+  - [x] 19.1 Chạy tất cả property tests
     - Đảm bảo tất cả 27 properties pass
     - Mỗi test chạy tối thiểu 100 iterations
     - Fix các bugs được phát hiện

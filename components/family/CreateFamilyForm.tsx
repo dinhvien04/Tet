@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { FamilyInviteCard } from './FamilyInviteCard'
+import { toast } from 'sonner'
 
 export function CreateFamilyForm() {
   const [name, setName] = useState('')
@@ -41,10 +42,14 @@ export function CreateFamilyForm() {
 
       const data = await response.json()
       
+      toast.success(`Tạo nhà "${name.trim()}" thành công!`)
+      
       // Show invite card instead of redirecting immediately
       setCreatedFamily(data)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Có lỗi xảy ra')
+      const errorMessage = err instanceof Error ? err.message : 'Có lỗi xảy ra'
+      setError(errorMessage)
+      toast.error(errorMessage)
     } finally {
       setLoading(false)
     }
