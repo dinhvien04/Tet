@@ -1,180 +1,144 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { connectDB } from '@/lib/mongodb'
+import Post from '@/lib/models/Post'
+import FamilyMember from '@/lib/models/FamilyMember'
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = createClient()
-    
-    // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
     }
 
     const body = await request.json()
-    const { family_id, content, type } = body
+    const familyId = body.familyId || body.family_id
+    const content = body.content
+    const type = body.type
 
-    // Validate required fields
-    if (!family_id || !content || !type) {
-      return NextResponse.json(
-        { error: 'Missing required fields: family_id, content, type' },
-        { status: 400 }
-      )
+    if (!familyId || !content || !type) {
+      return NextResponse.json({ error: 'Thieu thong tin bat buoc' }, { status: 400 })
     }
 
-    // Validate type
-    const validTypes = ['cau-doi', 'loi-chuc', 'thiep-tet']
-    if (!validTypes.includes(type)) {
-      return NextResponse.json(
-        { error: 'Invalid type. Must be one of: cau-doi, loi-chuc, thiep-tet' },
-        { status: 400 }
-      )
+    if (!['cau-doi', 'loi-chuc', 'thiep-tet'].includes(type)) {
+      return NextResponse.json({ error: 'Loai bai dang khong hop le' }, { status: 400 })
     }
 
-    // Verify user is member of the family
-    const { data: membership } = await supabase
-      .from('family_members')
-      .select('id')
-      .eq('family_id', family_id)
-      .eq('user_id', user.id)
-      .single()
+    await connectDB()
 
+    const membership = await FamilyMember.findOne({
+      familyId,
+      userId: session.user.id,
+    })
     if (!membership) {
       return NextResponse.json(
-        { error: 'You are not a member of this family' },
+        { error: 'Ban khong phai thanh vien cua nha nay' },
         { status: 403 }
       )
     }
 
-    // Create post
-    const { data: post, error: postError } = await supabase
-      .from('posts')
-      .insert({
-        family_id,
-        user_id: user.id,
-        content,
-        type
-      })
-      .select(`
-        *,
-        users (
-          id,
-          name,
-          avatar,
-          email
-        )
-      `)
-      .single()
+    const post = await Post.create({
+      familyId,
+      userId: session.user.id,
+      content: content.trim(),
+      type,
+    })
+    await post.populate('userId', 'name email avatar')
 
-    if (postError) {
-      console.error('Error creating post:', postError)
-      return NextResponse.json(
-        { error: 'Failed to create post' },
-        { status: 500 }
-      )
+    const user = post.userId as unknown as {
+      _id: { toString(): string }
+      name: string
+      email: string
+      avatar?: string
     }
 
-    return NextResponse.json(post, { status: 201 })
+    return NextResponse.json({
+      success: true,
+      post: {
+        id: post._id.toString(),
+        family_id: post.familyId.toString(),
+        user_id: user._id.toString(),
+        content: post.content,
+        type: post.type,
+        created_at: post.createdAt,
+        users: {
+          id: user._id.toString(),
+          name: user.name,
+          email: user.email,
+          avatar: user.avatar ?? null,
+        },
+      },
+    })
   } catch (error) {
-    console.error('Unexpected error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('Error creating post:', error)
+    return NextResponse.json({ error: 'Khong the tao bai dang' }, { status: 500 })
   }
 }
 
 export async function GET(request: NextRequest) {
   try {
-    const supabase = createClient()
-    
-    // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
     }
 
     const { searchParams } = new URL(request.url)
     const familyId = searchParams.get('familyId')
-    const from = parseInt(searchParams.get('from') || '0')
-    const to = parseInt(searchParams.get('to') || '9')
-
+    const from = parseInt(searchParams.get('from') || '0', 10)
+    const to = parseInt(searchParams.get('to') || '49', 10)
+    const limit = Math.max(1, to - from + 1)
     if (!familyId) {
-      return NextResponse.json(
-        { error: 'Missing familyId parameter' },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: 'Thieu familyId' }, { status: 400 })
     }
 
-    // Verify user is member of the family
-    const { data: membership } = await supabase
-      .from('family_members')
-      .select('id')
-      .eq('family_id', familyId)
-      .eq('user_id', user.id)
-      .single()
+    await connectDB()
 
+    const membership = await FamilyMember.findOne({
+      familyId,
+      userId: session.user.id,
+    })
     if (!membership) {
       return NextResponse.json(
-        { error: 'You are not a member of this family' },
+        { error: 'Ban khong phai thanh vien cua nha nay' },
         { status: 403 }
       )
     }
 
-    // Get posts with user info and reaction counts (with pagination)
-    const { data: posts, error: postsError } = await supabase
-      .from('posts')
-      .select(`
-        *,
-        users (
-          id,
-          name,
-          avatar,
-          email
-        )
-      `)
-      .eq('family_id', familyId)
-      .order('created_at', { ascending: false })
-      .range(from, to)
+    const posts = await Post.find({ familyId })
+      .populate('userId', 'name email avatar')
+      .sort({ createdAt: -1 })
+      .skip(from)
+      .limit(limit)
+      .lean()
 
-    if (postsError) {
-      console.error('Error fetching posts:', postsError)
-      return NextResponse.json(
-        { error: 'Failed to fetch posts' },
-        { status: 500 }
-      )
-    }
-
-    // Get reaction counts for all posts
-    const postIds = posts.map((p: any) => p.id)
-    const { data: reactions } = await supabase
-      .from('reactions')
-      .select('post_id, type, user_id')
-      .in('post_id', postIds)
-
-    // Aggregate reactions by post
-    const postsWithReactions = posts.map((post: any) => {
-      const postReactions = reactions?.filter((r: any) => r.post_id === post.id) || []
-      const heartCount = postReactions.filter((r: any) => r.type === 'heart').length
-      const hahaCount = postReactions.filter((r: any) => r.type === 'haha').length
-      const userReaction = postReactions.find((r: any) => r.user_id === user.id)?.type || null
+    const formattedPosts = posts.map((postDoc) => {
+      const user = postDoc.userId as unknown as {
+        _id: { toString(): string }
+        name: string
+        email: string
+        avatar?: string
+      }
 
       return {
-        ...post,
-        reactions: {
-          heart: heartCount,
-          haha: hahaCount
+        id: postDoc._id.toString(),
+        family_id: postDoc.familyId.toString(),
+        user_id: user._id.toString(),
+        content: postDoc.content,
+        type: postDoc.type,
+        created_at: postDoc.createdAt,
+        users: {
+          id: user._id.toString(),
+          name: user.name,
+          email: user.email,
+          avatar: user.avatar ?? null,
         },
-        userReaction
       }
     })
 
-    return NextResponse.json(postsWithReactions)
+    return NextResponse.json({ posts: formattedPosts })
   } catch (error) {
-    console.error('Unexpected error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('Error fetching posts:', error)
+    return NextResponse.json({ error: 'Khong the lay danh sach bai dang' }, { status: 500 })
   }
 }

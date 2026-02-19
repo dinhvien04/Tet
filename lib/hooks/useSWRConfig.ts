@@ -29,9 +29,6 @@ export const swrConfig: SWRConfiguration = {
   // Cache data for 5 minutes
   focusThrottleInterval: 5 * 60 * 1000,
   
-  // Optimistic UI updates
-  optimisticData: undefined,
-  
   // Custom fetcher with error handling and retry logic
   fetcher: async (url: string) => {
     const res = await fetchWithRetry(url, {}, {

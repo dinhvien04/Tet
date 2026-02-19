@@ -1,123 +1,95 @@
-import { createClient } from '@supabase/supabase-js'
+import { connectDB } from '@/lib/mongodb'
+import Event from '@/lib/models/Event'
+import EventTask from '@/lib/models/EventTask'
+import FamilyMember from '@/lib/models/FamilyMember'
+import Notification from '@/lib/models/Notification'
 
 /**
  * Check for upcoming events and create notifications
  * This function is used by the cron job but can also be called manually
  */
 export async function checkAndCreateNotifications() {
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  )
+  await connectDB()
 
   // Calculate time range: events happening in the next 24 hours
   const now = new Date()
   const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
 
   // Get upcoming events in the next 24 hours
-  const { data: upcomingEvents, error: eventsError } = await supabase
-    .from('events')
-    .select(`
-      id,
-      title,
-      date,
-      location,
-      family_id,
-      families!inner (
-        id,
-        name,
-        family_members (
-          user_id
-        )
-      )
-    `)
-    .gte('date', now.toISOString())
-    .lte('date', tomorrow.toISOString())
-
-  if (eventsError) {
-    throw new Error(`Failed to fetch events: ${eventsError.message}`)
-  }
+  const upcomingEvents = await Event.find({
+    date: {
+      $gte: now,
+      $lte: tomorrow,
+    },
+  }).lean()
 
   let eventNotificationsCreated = 0
   let taskNotificationsCreated = 0
 
   // Process each upcoming event
-  for (const event of upcomingEvents || []) {
+  for (const event of upcomingEvents) {
+    // Get all family members
+    const familyMembers = await FamilyMember.find({
+      familyId: event.familyId,
+    }).select('userId')
+
     // Create event reminders for all family members
-    const familyMembers = (event.families as any).family_members || []
-    
     for (const member of familyMembers) {
       // Check if notification already exists to avoid duplicates
-      const { data: existingNotification } = await supabase
-        .from('notifications')
-        .select('id')
-        .eq('user_id', member.user_id)
-        .eq('type', 'event_reminder')
-        .eq('link', `/events/${event.id}`)
-        .gte('created_at', new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString())
-        .single()
+      const existingNotification = await Notification.findOne({
+        userId: member.userId,
+        type: 'event_reminder',
+        link: `/events/${event._id}`,
+        createdAt: { $gte: yesterday },
+      })
 
       if (!existingNotification) {
-        const { error: notificationError } = await supabase
-          .from('notifications')
-          .insert({
-            user_id: member.user_id,
-            type: 'event_reminder',
-            title: `Sự kiện "${event.title}" sắp diễn ra`,
-            content: `Sự kiện sẽ diễn ra vào ${new Date(event.date).toLocaleString('vi-VN')}${event.location ? ` tại ${event.location}` : ''}`,
-            link: `/events/${event.id}`,
-            read: false
-          })
-
-        if (!notificationError) {
-          eventNotificationsCreated++
-        }
+        await Notification.create({
+          userId: member.userId,
+          type: 'event_reminder',
+          title: `Sự kiện "${event.title}" sắp diễn ra`,
+          content: `Sự kiện sẽ diễn ra vào ${new Date(event.date).toLocaleString('vi-VN')}${event.location ? ` tại ${event.location}` : ''}`,
+          link: `/events/${event._id}`,
+          read: false,
+        })
+        eventNotificationsCreated++
       }
     }
 
     // Get pending tasks for this event
-    const { data: pendingTasks, error: tasksError } = await supabase
-      .from('event_tasks')
-      .select('id, task, assigned_to')
-      .eq('event_id', event.id)
-      .eq('status', 'pending')
+    const pendingTasks = await EventTask.find({
+      eventId: event._id,
+      status: 'pending',
+    }).select('_id task assignedTo')
 
-    if (!tasksError && pendingTasks) {
-      for (const task of pendingTasks) {
-        // Check if task notification already exists
-        const { data: existingTaskNotification } = await supabase
-          .from('notifications')
-          .select('id')
-          .eq('user_id', task.assigned_to)
-          .eq('type', 'task_reminder')
-          .eq('link', `/events/${event.id}`)
-          .gte('created_at', new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString())
-          .single()
+    for (const task of pendingTasks) {
+      // Check if task notification already exists
+      const existingTaskNotification = await Notification.findOne({
+        userId: task.assignedTo,
+        type: 'task_reminder',
+        link: `/events/${event._id}`,
+        createdAt: { $gte: yesterday },
+      })
 
-        if (!existingTaskNotification) {
-          const { error: taskNotificationError } = await supabase
-            .from('notifications')
-            .insert({
-              user_id: task.assigned_to,
-              type: 'task_reminder',
-              title: 'Bạn có công việc chưa hoàn thành',
-              content: `"${task.task}" trong sự kiện "${event.title}"`,
-              link: `/events/${event.id}`,
-              read: false
-            })
-
-          if (!taskNotificationError) {
-            taskNotificationsCreated++
-          }
-        }
+      if (!existingTaskNotification) {
+        await Notification.create({
+          userId: task.assignedTo,
+          type: 'task_reminder',
+          title: 'Bạn có công việc chưa hoàn thành',
+          content: `"${task.task}" trong sự kiện "${event.title}"`,
+          link: `/events/${event._id}`,
+          read: false,
+        })
+        taskNotificationsCreated++
       }
     }
   }
 
   return {
-    eventsChecked: upcomingEvents?.length || 0,
+    eventsChecked: upcomingEvents.length,
     eventNotificationsCreated,
-    taskNotificationsCreated
+    taskNotificationsCreated,
   }
 }
 
@@ -125,40 +97,25 @@ export async function checkAndCreateNotifications() {
  * Get unread notifications for a user
  */
 export async function getUnreadNotifications(userId: string) {
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
+  await connectDB()
 
-  const { data, error } = await supabase
-    .from('notifications')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('read', false)
-    .order('created_at', { ascending: false })
+  const notifications = await Notification.find({
+    userId,
+    read: false,
+  })
+    .sort({ createdAt: -1 })
+    .lean()
 
-  if (error) {
-    throw new Error(`Failed to fetch notifications: ${error.message}`)
-  }
-
-  return data
+  return notifications
 }
 
 /**
  * Mark a notification as read
  */
 export async function markNotificationAsRead(notificationId: string) {
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
+  await connectDB()
 
-  const { error } = await supabase
-    .from('notifications')
-    .update({ read: true })
-    .eq('id', notificationId)
-
-  if (error) {
-    throw new Error(`Failed to mark notification as read: ${error.message}`)
-  }
+  await Notification.findByIdAndUpdate(notificationId, {
+    read: true,
+  })
 }

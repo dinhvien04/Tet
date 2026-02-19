@@ -3,7 +3,13 @@
 import { useState } from 'react'
 import Image from 'next/image'
 import { Check, X } from 'lucide-react'
-import { User } from '@/types/database'
+
+interface PhotoUser {
+  id: string
+  name: string
+  email?: string
+  avatar?: string | null
+}
 
 interface Photo {
   id: string
@@ -11,7 +17,7 @@ interface Photo {
   user_id: string
   url: string
   uploaded_at: string
-  users?: User
+  users?: PhotoUser
 }
 
 interface PhotoSelectorProps {

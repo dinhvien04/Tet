@@ -8,8 +8,9 @@
 'use client'
 
 import { NotificationBell } from '@/components/notifications'
-import { useAuth } from '@/components/auth/AuthProvider'
+import { useAuth } from '@/lib/hooks/useAuth'
 import { Button } from '@/components/ui/button'
+import Link from 'next/link'
 
 /**
  * Example 1: Simple header with notification bell
@@ -26,7 +27,7 @@ export function SimpleHeader() {
         
         <div className="flex items-center gap-4">
           <NotificationBell userId={user.id} />
-          <span className="text-sm">{user.user_metadata?.full_name}</span>
+          <span className="text-sm">{user.name || user.email}</span>
         </div>
       </div>
     </header>
@@ -49,9 +50,9 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-6">
             <h1 className="text-xl font-bold text-red-600">Tết Connect</h1>
             <nav className="hidden md:flex gap-4">
-              <a href="/dashboard" className="text-sm hover:text-red-600">Trang chủ</a>
-              <a href="/events" className="text-sm hover:text-red-600">Sự kiện</a>
-              <a href="/photos" className="text-sm hover:text-red-600">Album</a>
+              <Link href="/dashboard" className="text-sm hover:text-red-600">Trang chủ</Link>
+              <Link href="/events" className="text-sm hover:text-red-600">Sự kiện</Link>
+              <Link href="/photos" className="text-sm hover:text-red-600">Album</Link>
             </nav>
           </div>
           
@@ -62,7 +63,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
             {/* User menu */}
             <div className="flex items-center gap-2">
               <span className="text-sm hidden md:inline">
-                {user.user_metadata?.full_name || user.email}
+                {user.name || user.email}
               </span>
               <Button variant="ghost" onClick={signOut}>
                 Đăng xuất
@@ -160,3 +161,4 @@ export function NotificationCenterPage() {
     </div>
   )
 }
+

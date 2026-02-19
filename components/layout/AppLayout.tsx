@@ -5,7 +5,7 @@ import { Sidebar } from './Sidebar'
 import { MobileHeader } from './MobileHeader'
 import { MobileMenu } from './MobileMenu'
 import { NotificationBell } from '@/components/notifications'
-import { useAuth } from '@/components/auth/AuthProvider'
+import { useAuth } from '@/lib/hooks/useAuth'
 import { OfflineIndicator } from '@/components/ui/offline-indicator'
 
 interface AppLayoutProps {
@@ -43,7 +43,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             <div className="flex items-center gap-4">
               {user && <NotificationBell userId={user.id} />}
               <div className="text-sm text-gray-700">
-                {user?.user_metadata?.full_name || user?.email}
+                {user?.name || user?.email}
               </div>
             </div>
           </div>

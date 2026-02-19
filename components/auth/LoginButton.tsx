@@ -2,8 +2,9 @@
 
 import { useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { signIn } from 'next-auth/react'
 import { Button } from '@/components/ui/button'
+import { toast } from 'sonner'
 
 export function LoginButton() {
   const [isLoading, setIsLoading] = useState(false)
@@ -15,26 +16,15 @@ export function LoginButton() {
       setIsLoading(true)
       
       // Build callback URL with redirect parameter
-      const callbackUrl = new URL(`${window.location.origin}/auth/callback`)
-      if (redirect) {
-        callbackUrl.searchParams.set('redirect', redirect)
-      }
+      const callbackUrl = redirect || '/dashboard'
       
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: callbackUrl.toString(),
-        },
+      await signIn('google', {
+        callbackUrl,
+        redirect: true,
       })
-
-      if (error) {
-        console.error('Login error:', error)
-        alert('Đăng nhập thất bại. Vui lòng thử lại.')
-      }
     } catch (error) {
-      console.error('Unexpected error:', error)
-      alert('Có lỗi xảy ra. Vui lòng thử lại.')
-    } finally {
+      console.error('Login error:', error)
+      toast.error('Đăng nhập thất bại. Vui lòng thử lại.')
       setIsLoading(false)
     }
   }

@@ -3,8 +3,14 @@
 import { useEffect, useCallback } from 'react'
 import Image from 'next/image'
 import { X, ChevronLeft, ChevronRight } from 'lucide-react'
-import { User } from '@/types/database'
 import { useSwipeGesture } from '@/lib/hooks/useSwipeGesture'
+
+interface PhotoUser {
+  id: string
+  name: string
+  email?: string
+  avatar?: string | null
+}
 
 interface Photo {
   id: string
@@ -12,7 +18,7 @@ interface Photo {
   user_id: string
   url: string
   uploaded_at: string
-  users?: User
+  users?: PhotoUser
 }
 
 interface PhotoViewerProps {

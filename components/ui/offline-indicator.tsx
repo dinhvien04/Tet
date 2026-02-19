@@ -19,8 +19,12 @@ export function OfflineIndicator({
 }: OfflineIndicatorProps) {
   const [isOnline, setIsOnline] = useState(true)
   const [showIndicator, setShowIndicator] = useState(false)
+  const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
+    // Mark as mounted to prevent hydration mismatch
+    setMounted(true)
+    
     // Initial state
     setIsOnline(navigator.onLine)
     setShowIndicator(!navigator.onLine || showWhenOnline)
@@ -51,7 +55,8 @@ export function OfflineIndicator({
     }
   }, [showWhenOnline])
 
-  if (!showIndicator) return null
+  // Don't render until mounted to prevent hydration mismatch
+  if (!mounted || !showIndicator) return null
 
   return (
     <div

@@ -1,75 +1,89 @@
-import { createClient } from '@/lib/supabase'
 import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { connectDB } from '@/lib/mongodb'
+import EventTask from '@/lib/models/EventTask'
+import Event from '@/lib/models/Event'
+import FamilyMember from '@/lib/models/FamilyMember'
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const supabase = createClient()
-    const { id: taskId } = await params
+    const { id } = await params;
     
     // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const session = await getServerSession(authOptions)
+    
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: 'Vui lòng đăng nhập' },
+        { status: 401 }
+      )
     }
 
-    const body = await request.json()
-    const { status } = body
+    const taskId = id
+    const { status } = await request.json()
 
     // Validate status
     if (!status || !['pending', 'completed'].includes(status)) {
       return NextResponse.json(
-        { error: 'Invalid status. Must be "pending" or "completed"' },
+        { error: 'Trạng thái không hợp lệ' },
         { status: 400 }
       )
     }
 
-    // Get task and verify permissions
-    const { data: task } = await supabase
-      .from('event_tasks')
-      .select('*, events!inner(family_id)')
-      .eq('id', taskId)
-      .single()
+    await connectDB()
 
+    // Find task
+    const task = await EventTask.findById(taskId)
+    
     if (!task) {
-      return NextResponse.json({ error: 'Task not found' }, { status: 404 })
+      return NextResponse.json(
+        { error: 'Công việc không tồn tại' },
+        { status: 404 }
+      )
     }
 
-    // Verify user is member of the family
-    const { data: membership } = await supabase
-      .from('family_members')
-      .select('id')
-      .eq('family_id', task.events.family_id)
-      .eq('user_id', user.id)
-      .single()
+    // Get event to check family membership
+    const event = await Event.findById(task.eventId)
+    
+    if (!event) {
+      return NextResponse.json(
+        { error: 'Sự kiện không tồn tại' },
+        { status: 404 }
+      )
+    }
+
+    // Check if user is a member of the family
+    const membership = await FamilyMember.findOne({
+      familyId: event.familyId,
+      userId: session.user.id,
+    })
 
     if (!membership) {
       return NextResponse.json(
-        { error: 'You are not a member of this family' },
+        { error: 'Bạn không phải thành viên của nhà này' },
         { status: 403 }
       )
     }
 
     // Update task status
-    const { data: updatedTask, error } = await supabase
-      .from('event_tasks')
-      .update({ status })
-      .eq('id', taskId)
-      .select('*, users!event_tasks_assigned_to_fkey(id, name, avatar)')
-      .single()
+    task.status = status
+    await task.save()
 
-    if (error) {
-      console.error('Error updating task:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
-
-    return NextResponse.json(updatedTask, { status: 200 })
+    return NextResponse.json({
+      success: true,
+      task: {
+        id: task._id.toString(),
+        status: task.status,
+      },
+    })
   } catch (error) {
-    console.error('Error in PATCH /api/tasks/[id]:', error)
+    console.error('Error updating task:', error)
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Không thể cập nhật công việc' },
       { status: 500 }
     )
   }

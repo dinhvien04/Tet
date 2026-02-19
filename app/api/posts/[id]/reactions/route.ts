@@ -1,129 +1,127 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { connectDB } from '@/lib/mongodb'
+import Post from '@/lib/models/Post'
+import Reaction from '@/lib/models/Reaction'
+import FamilyMember from '@/lib/models/FamilyMember'
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const supabase = createClient()
-    const { id: postId } = await params
-    
-    // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const { id } = await params
+
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
     }
 
-    const body = await request.json()
-    const { type } = body
-
-    // Validate type
-    const validTypes = ['heart', 'haha']
-    if (!type || !validTypes.includes(type)) {
-      return NextResponse.json(
-        { error: 'Invalid type. Must be one of: heart, haha' },
-        { status: 400 }
-      )
+    const postId = id
+    const { type } = await request.json()
+    if (!type || !['heart', 'haha'].includes(type)) {
+      return NextResponse.json({ error: 'Loai reaction khong hop le' }, { status: 400 })
     }
 
-    // Verify post exists and user has access
-    const { data: post } = await supabase
-      .from('posts')
-      .select('family_id')
-      .eq('id', postId)
-      .single()
+    await connectDB()
 
+    const post = await Post.findById(postId)
     if (!post) {
-      return NextResponse.json({ error: 'Post not found' }, { status: 404 })
+      return NextResponse.json({ error: 'Bai dang khong ton tai' }, { status: 404 })
     }
 
-    // Verify user is member of the family
-    const { data: membership } = await supabase
-      .from('family_members')
-      .select('id')
-      .eq('family_id', post.family_id)
-      .eq('user_id', user.id)
-      .single()
-
+    const membership = await FamilyMember.findOne({
+      familyId: post.familyId,
+      userId: session.user.id,
+    })
     if (!membership) {
       return NextResponse.json(
-        { error: 'You are not a member of this family' },
+        { error: 'Ban khong phai thanh vien cua nha nay' },
         { status: 403 }
       )
     }
 
-    // Check if user already has a reaction on this post
-    const { data: existingReaction } = await supabase
-      .from('reactions')
-      .select('*')
-      .eq('post_id', postId)
-      .eq('user_id', user.id)
-      .single()
+    const existingReaction = await Reaction.findOne({
+      postId,
+      userId: session.user.id,
+    })
 
     if (existingReaction) {
       if (existingReaction.type === type) {
-        // Same type - remove reaction
-        const { error: deleteError } = await supabase
-          .from('reactions')
-          .delete()
-          .eq('id', existingReaction.id)
-
-        if (deleteError) {
-          console.error('Error deleting reaction:', deleteError)
-          return NextResponse.json(
-            { error: 'Failed to remove reaction' },
-            { status: 500 }
-          )
-        }
-
-        return NextResponse.json({ action: 'removed', type })
-      } else {
-        // Different type - update reaction
-        const { data: updatedReaction, error: updateError } = await supabase
-          .from('reactions')
-          .update({ type })
-          .eq('id', existingReaction.id)
-          .select()
-          .single()
-
-        if (updateError) {
-          console.error('Error updating reaction:', updateError)
-          return NextResponse.json(
-            { error: 'Failed to update reaction' },
-            { status: 500 }
-          )
-        }
-
-        return NextResponse.json({ action: 'updated', type, reaction: updatedReaction })
-      }
-    } else {
-      // No existing reaction - create new one
-      const { data: newReaction, error: insertError } = await supabase
-        .from('reactions')
-        .insert({
-          post_id: postId,
-          user_id: user.id,
-          type
-        })
-        .select()
-        .single()
-
-      if (insertError) {
-        console.error('Error creating reaction:', insertError)
-        return NextResponse.json(
-          { error: 'Failed to add reaction' },
-          { status: 500 }
-        )
+        await Reaction.findByIdAndDelete(existingReaction._id)
+        return NextResponse.json({ success: true, action: 'removed', type })
       }
 
-      return NextResponse.json({ action: 'added', type, reaction: newReaction }, { status: 201 })
+      existingReaction.type = type
+      await existingReaction.save()
+      return NextResponse.json({ success: true, action: 'updated', type })
     }
+
+    await Reaction.create({
+      postId,
+      userId: session.user.id,
+      type,
+    })
+
+    return NextResponse.json({ success: true, action: 'added', type })
   } catch (error) {
-    console.error('Unexpected error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('Error toggling reaction:', error)
+    return NextResponse.json({ error: 'Khong the thuc hien reaction' }, { status: 500 })
+  }
+}
+
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
+    }
+
+    const postId = id
+
+    await connectDB()
+
+    const post = await Post.findById(postId)
+    if (!post) {
+      return NextResponse.json({ error: 'Bai dang khong ton tai' }, { status: 404 })
+    }
+
+    const membership = await FamilyMember.findOne({
+      familyId: post.familyId,
+      userId: session.user.id,
+    })
+    if (!membership) {
+      return NextResponse.json(
+        { error: 'Ban khong phai thanh vien cua nha nay' },
+        { status: 403 }
+      )
+    }
+
+    const reactions = await Reaction.find({ postId }).populate('userId', 'name avatar').lean()
+
+    const heartCount = reactions.filter((reaction) => reaction.type === 'heart').length
+    const hahaCount = reactions.filter((reaction) => reaction.type === 'haha').length
+
+    const userReaction = reactions.find((reaction) => {
+      const user = reaction.userId as unknown as { _id: { toString(): string } }
+      return user._id.toString() === session.user.id
+    })
+
+    return NextResponse.json({
+      reactions: {
+        heart: heartCount,
+        haha: hahaCount,
+      },
+      userReaction: userReaction ? userReaction.type : null,
+    })
+  } catch (error) {
+    console.error('Error fetching reactions:', error)
+    return NextResponse.json({ error: 'Khong the lay reactions' }, { status: 500 })
   }
 }

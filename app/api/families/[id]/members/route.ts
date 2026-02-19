@@ -1,52 +1,79 @@
-import { createClient } from '@/lib/supabase'
 import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { connectDB } from '@/lib/mongodb'
+import FamilyMember from '@/lib/models/FamilyMember'
 
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const supabase = createClient()
-    const { id: familyId } = await params
+    const { id } = await params
     
     // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const session = await getServerSession(authOptions)
+
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: 'Vui lòng đăng nhập' },
+        { status: 401 }
+      )
     }
 
-    // Verify user is member of the family
-    const { data: membership } = await supabase
-      .from('family_members')
-      .select('id')
-      .eq('family_id', familyId)
-      .eq('user_id', user.id)
-      .single()
+    const familyId = id
 
-    if (!membership) {
+    await connectDB()
+
+    // Check if user is a member of this family
+    const userMembership = await FamilyMember.findOne({
+      familyId,
+      userId: session.user.id,
+    })
+
+    if (!userMembership) {
       return NextResponse.json(
-        { error: 'You are not a member of this family' },
+        { error: 'Bạn không phải thành viên của nhà này' },
         { status: 403 }
       )
     }
 
-    // Get all family members
-    const { data: members, error } = await supabase
-      .from('family_members')
-      .select('*, users!family_members_user_id_fkey(id, name, avatar)')
-      .eq('family_id', familyId)
-      .order('joined_at', { ascending: true })
+    // Get all members
+    const members = await FamilyMember.find({ familyId })
+      .populate('userId', 'name email avatar')
+      .lean()
 
-    if (error) {
-      console.error('Error fetching family members:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    const formattedMembers = members.map((member) => {
+      const user = member.userId as unknown as {
+        _id: { toString(): string }
+        name: string
+        email: string
+        avatar?: string
+      }
 
-    return NextResponse.json(members, { status: 200 })
+      return {
+        id: member._id.toString(),
+        user_id: user._id.toString(),
+        name: user.name,
+        email: user.email,
+        avatar: user.avatar,
+        role: member.role,
+        joined_at: member.joinedAt,
+        // Backward-compatible nested shape for older UI code.
+        users: {
+          id: user._id.toString(),
+          name: user.name,
+          email: user.email,
+          avatar: user.avatar,
+        },
+      }
+    })
+
+    return NextResponse.json({ members: formattedMembers })
   } catch (error) {
-    console.error('Error in GET /api/families/[id]/members:', error)
+    console.error('Error fetching members:', error)
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Không thể lấy danh sách thành viên' },
       { status: 500 }
     )
   }

@@ -2,33 +2,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react'
 import fc from 'fast-check'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
-import { supabase } from '@/lib/supabase'
 import type { Notification } from '@/types/database'
 
-// Mock Supabase
-vi.mock('@/lib/supabase', () => ({
-  supabase: {
-    from: vi.fn(),
-    channel: vi.fn(),
-    removeChannel: vi.fn()
-  }
-}))
+// Mock fetch globally
+const mockFetch = vi.fn()
+global.fetch = mockFetch as any
 
 describe('Notification UI Property Tests', () => {
   const mockUserId = 'test-user-123'
-  let mockChannel: any
 
   beforeEach(() => {
     vi.clearAllMocks()
     cleanup()
-
-    // Mock channel for realtime subscriptions
-    mockChannel = {
-      on: vi.fn().mockReturnThis(),
-      subscribe: vi.fn().mockReturnThis()
-    }
-
-    ;(supabase.channel as any).mockReturnValue(mockChannel)
+    mockFetch.mockClear()
   })
 
   afterEach(() => {
@@ -60,21 +46,11 @@ describe('Notification UI Property Tests', () => {
             })
           )
 
-          // Mock Supabase to return unread notifications
-          const mockFrom = {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                eq: vi.fn().mockReturnValue({
-                  order: vi.fn().mockResolvedValue({
-                    data: unreadNotifications,
-                    error: null
-                  })
-                })
-              })
-            })
-          }
-
-          ;(supabase.from as any).mockReturnValue(mockFrom)
+          // Mock fetch to return unread notifications
+          mockFetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => unreadNotifications
+          })
 
           // Render component
           const { container, unmount } = render(<NotificationBell userId={mockUserId} />)
@@ -83,7 +59,7 @@ describe('Notification UI Property Tests', () => {
             // Wait for notifications to load
             await waitFor(
               () => {
-                expect(mockFrom.select).toHaveBeenCalled()
+                expect(mockFetch).toHaveBeenCalledWith('/api/notifications')
               },
               { timeout: 1000 }
             )
@@ -171,18 +147,32 @@ describe('Notification UI Property Tests', () => {
           const mockFrom = {
             select: vi.fn().mockReturnValue({
               eq: vi.fn().mockReturnValue({
-                eq: vi.fn().mockReturnValue({
-                  order: vi.fn().mockResolvedValue({
-                    data: [notification],
-                    error: null
-                  })
-                })
-              })
-            }),
-            update: mockUpdate
-          }
 
-          ;(supabase.from as any).mockReturnValue(mockFrom)
+          // Mock initial fetch to return the notification
+          mockFetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => [notification]
+          })
+
+          // Mock PATCH request for marking as read
+          let patchCalled = false
+          let patchNotificationId = ''
+          
+          mockFetch.mockImplementation((url, options) => {
+            if (options?.method === 'PATCH') {
+              patchCalled = true
+              const body = JSON.parse(options.body as string)
+              patchNotificationId = body.notificationId
+              return Promise.resolve({
+                ok: true,
+                json: async () => ({ success: true })
+              })
+            }
+            return Promise.resolve({
+              ok: true,
+              json: async () => []
+            })
+          })
 
           // Render component
           const { unmount, container } = render(<NotificationBell userId={mockUserId} />)
@@ -214,12 +204,11 @@ describe('Notification UI Property Tests', () => {
             expect(notificationButtons.length).toBe(1)
             fireEvent.click(notificationButtons[0])
 
-            // Verify update was called with read: true
+            // Verify PATCH was called to mark as read
             await waitFor(
               () => {
-                expect(updateCalled).toBe(true)
-                expect(updateReadValue).toBe(true)
-                expect(updateIdValue).toBe(notification.id)
+                expect(patchCalled).toBe(true)
+                expect(patchNotificationId).toBe(notification.id)
               },
               { timeout: 1000 }
             )
@@ -253,28 +242,18 @@ describe('Notification UI Property Tests', () => {
             created_at: new Date().toISOString()
           }))
 
-          // Mock Supabase
-          const mockFrom = {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                eq: vi.fn().mockReturnValue({
-                  order: vi.fn().mockResolvedValue({
-                    data: notifications,
-                    error: null
-                  })
-                })
-              })
-            })
-          }
-
-          ;(supabase.from as any).mockReturnValue(mockFrom)
+          // Mock fetch
+          mockFetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => notifications
+          })
 
           // Render component
           const { container, unmount } = render(<NotificationBell userId={mockUserId} />)
 
           try {
             await waitFor(() => {
-              expect(mockFrom.select).toHaveBeenCalled()
+              expect(mockFetch).toHaveBeenCalledWith('/api/notifications')
             }, { timeout: 1000 })
 
             // Verify count display

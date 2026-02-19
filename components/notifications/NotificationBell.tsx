@@ -2,10 +2,8 @@
 
 import { Bell } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { AvatarBadge } from '@/components/ui/avatar'
 import { useState, useEffect } from 'react'
 import { NotificationDropdown } from './NotificationDropdown'
-import { supabase } from '@/lib/supabase'
 import type { Notification } from '@/types/database'
 
 interface NotificationBellProps {
@@ -20,14 +18,13 @@ export function NotificationBell({ userId }: NotificationBellProps) {
   // Fetch notifications
   const fetchNotifications = async () => {
     try {
-      const { data, error } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('read', false)
-        .order('created_at', { ascending: false })
+      const response = await fetch('/api/notifications')
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch notifications')
+      }
 
-      if (error) throw error
+      const data = await response.json()
       setNotifications(data || [])
     } catch (error) {
       console.error('Error fetching notifications:', error)
@@ -39,45 +36,11 @@ export function NotificationBell({ userId }: NotificationBellProps) {
   useEffect(() => {
     fetchNotifications()
 
-    // Subscribe to realtime updates for new notifications
-    const channel = supabase
-      .channel(`notifications:${userId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'notifications',
-          filter: `user_id=eq.${userId}`
-        },
-        (payload) => {
-          const newNotification = payload.new as Notification
-          if (!newNotification.read) {
-            setNotifications((prev) => [newNotification, ...prev])
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'notifications',
-          filter: `user_id=eq.${userId}`
-        },
-        (payload) => {
-          const updatedNotification = payload.new as Notification
-          if (updatedNotification.read) {
-            setNotifications((prev) =>
-              prev.filter((n) => n.id !== updatedNotification.id)
-            )
-          }
-        }
-      )
-      .subscribe()
+    // Poll for new notifications every 30 seconds
+    const interval = setInterval(fetchNotifications, 30000)
 
     return () => {
-      supabase.removeChannel(channel)
+      clearInterval(interval)
     }
   }, [userId])
 
@@ -85,12 +48,17 @@ export function NotificationBell({ userId }: NotificationBellProps) {
 
   const handleMarkAsRead = async (notificationId: string, link?: string) => {
     try {
-      const { error } = await supabase
-        .from('notifications')
-        .update({ read: true })
-        .eq('id', notificationId)
+      const response = await fetch('/api/notifications', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ notificationId }),
+      })
 
-      if (error) throw error
+      if (!response.ok) {
+        throw new Error('Failed to mark notification as read')
+      }
 
       // Remove from local state
       setNotifications((prev) => prev.filter((n) => n.id !== notificationId))

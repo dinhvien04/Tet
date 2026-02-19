@@ -1,15 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { connectDB } from '@/lib/mongodb'
+import FamilyMember from '@/lib/models/FamilyMember'
+import Photo from '@/lib/models/Photo'
+import { v2 as cloudinary } from 'cloudinary'
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+})
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = createClient()
-    
     // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    await connectDB()
 
     // Parse request body
     const body = await request.json()
@@ -23,12 +35,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify user is member of the family
-    const { data: membership } = await supabase
-      .from('family_members')
-      .select('id')
-      .eq('family_id', familyId)
-      .eq('user_id', user.id)
-      .single()
+    const membership = await FamilyMember.findOne({
+      familyId,
+      userId: session.user.id,
+    })
 
     if (!membership) {
       return NextResponse.json(
@@ -38,49 +48,29 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate photo URLs belong to the family
-    const { data: photos, error: photosError } = await supabase
-      .from('photos')
-      .select('id, url')
-      .eq('family_id', familyId)
-      .in('url', photoUrls)
+    const photos = await Photo.find({
+      familyId,
+      url: { $in: photoUrls },
+    }).select('_id url')
 
-    if (photosError || !photos || photos.length !== photoUrls.length) {
+    if (!photos || photos.length !== photoUrls.length) {
       return NextResponse.json(
         { error: 'Invalid photo URLs provided' },
         { status: 400 }
       )
     }
 
-    // Convert base64 video blob to buffer
-    const base64Data = videoBlob.split(',')[1]
-    const buffer = Buffer.from(base64Data, 'base64')
-
-    // Upload video to Supabase Storage
-    const fileName = `${familyId}/recap-${Date.now()}.webm`
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('videos')
-      .upload(fileName, buffer, {
-        contentType: 'video/webm',
-        upsert: false
-      })
-
-    if (uploadError) {
-      console.error('Error uploading video:', uploadError)
-      return NextResponse.json(
-        { error: 'Failed to upload video' },
-        { status: 500 }
-      )
-    }
-
-    // Get public URL
-    const { data: { publicUrl } } = supabase.storage
-      .from('videos')
-      .getPublicUrl(fileName)
+    // Upload video to Cloudinary
+    const uploadResult = await cloudinary.uploader.upload(videoBlob, {
+      resource_type: 'video',
+      folder: `tet-connect/videos/${familyId}`,
+      format: 'webm',
+    })
 
     return NextResponse.json({
       success: true,
-      videoUrl: publicUrl,
-      path: uploadData.path
+      videoUrl: uploadResult.secure_url,
+      publicId: uploadResult.public_id,
     }, { status: 200 })
 
   } catch (error) {

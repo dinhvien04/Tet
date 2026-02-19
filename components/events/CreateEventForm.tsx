@@ -19,9 +19,9 @@ export function CreateEventForm({ familyId, onEventCreated }: CreateEventFormPro
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (!title.trim() || !date) {
-      toast.error('Vui lòng nhập tiêu đề và ngày')
+      toast.error('Vui long nhap tieu de va ngay')
       return
     }
 
@@ -32,29 +32,26 @@ export function CreateEventForm({ familyId, onEventCreated }: CreateEventFormPro
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          family_id: familyId,
+          familyId,
           title: title.trim(),
           date: new Date(date).toISOString(),
-          location: location.trim() || null
-        })
+          location: location.trim() || null,
+        }),
       })
 
       if (!response.ok) {
         const error = await response.json()
-        throw new Error(error.error || 'Không thể tạo sự kiện')
+        throw new Error(error.error || 'Khong the tao su kien')
       }
 
-      toast.success('Đã tạo sự kiện thành công!')
+      toast.success('Da tao su kien thanh cong!')
       setTitle('')
       setDate('')
       setLocation('')
-      
-      if (onEventCreated) {
-        onEventCreated()
-      }
+      onEventCreated?.()
     } catch (error) {
       console.error('Error creating event:', error)
-      toast.error(error instanceof Error ? error.message : 'Có lỗi xảy ra')
+      toast.error(error instanceof Error ? error.message : 'Co loi xay ra')
     } finally {
       setIsLoading(false)
     }
@@ -63,20 +60,20 @@ export function CreateEventForm({ familyId, onEventCreated }: CreateEventFormPro
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <Label htmlFor="title">Tiêu đề sự kiện *</Label>
+        <Label htmlFor="title">Tieu de su kien *</Label>
         <Input
           id="title"
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Ví dụ: Cúng tất niên, Mùng 1 Tết"
+          placeholder="Vi du: Cung tat nien, Mung 1 Tet"
           required
           disabled={isLoading}
         />
       </div>
 
       <div>
-        <Label htmlFor="date">Ngày *</Label>
+        <Label htmlFor="date">Ngay *</Label>
         <Input
           id="date"
           type="datetime-local"
@@ -88,19 +85,19 @@ export function CreateEventForm({ familyId, onEventCreated }: CreateEventFormPro
       </div>
 
       <div>
-        <Label htmlFor="location">Địa điểm</Label>
+        <Label htmlFor="location">Dia diem</Label>
         <Input
           id="location"
           type="text"
           value={location}
           onChange={(e) => setLocation(e.target.value)}
-          placeholder="Ví dụ: Nhà ông bà nội"
+          placeholder="Vi du: Nha ong ba noi"
           disabled={isLoading}
         />
       </div>
 
       <Button type="submit" disabled={isLoading} className="w-full">
-        {isLoading ? 'Đang tạo...' : 'Tạo sự kiện'}
+        {isLoading ? 'Dang tao...' : 'Tao su kien'}
       </Button>
     </form>
   )

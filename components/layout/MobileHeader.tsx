@@ -3,7 +3,7 @@
 import { Menu, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { NotificationBell } from '@/components/notifications'
-import { useAuth } from '@/components/auth/AuthProvider'
+import { useAuth } from '@/lib/hooks/useAuth'
 
 interface MobileHeaderProps {
   onMenuToggle: () => void

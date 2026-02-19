@@ -3,7 +3,7 @@
 import { Home, Calendar, Image, Users, LogOut } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useAuth } from '@/components/auth/AuthProvider'
+import { useAuth } from '@/lib/hooks/useAuth'
 import { FamilySelector } from '@/components/family/FamilySelector'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'

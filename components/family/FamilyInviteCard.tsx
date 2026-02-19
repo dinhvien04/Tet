@@ -20,7 +20,7 @@ export function FamilyInviteCard({ inviteCode }: FamilyInviteCardProps) {
       setCopying(true)
       await navigator.clipboard.writeText(inviteLink)
       toast.success('Đã sao chép link mời!')
-    } catch (error) {
+    } catch {
       toast.error('Không thể sao chép link. Vui lòng thử lại.')
     } finally {
       setCopying(false)

@@ -61,9 +61,12 @@ Tết Connect được xây dựng theo kiến trúc modern web application vớ
 - **Shadcn/ui**: Component library
 
 ### Backend
-- **Supabase**: Backend-as-a-Service
-  - PostgreSQL database
-  - Authentication (Google OAuth)
+- **MongoDB Atlas**: Database-as-a-Service
+  - NoSQL document database
+  - Mongoose ODM for data modeling
+- **NextAuth.js**: Authentication
+  - Google OAuth provider
+  - Session management
   - Storage (images, videos)
   - Realtime subscriptions
   - Row Level Security (RLS)
@@ -91,13 +94,13 @@ Tết Connect được xây dựng theo kiến trúc modern web application vớ
 3. Server calls Gemini API with prompt
 4. Gemini returns generated content
 5. User reviews and posts to family wall
-6. Content saved to Supabase
-7. Realtime update to all family members
+6. Content saved to MongoDB
+7. Polling updates notify all family members
 
 ### Realtime Updates Flow
-1. Client subscribes to Supabase Realtime channel
+1. Client polls API endpoints every 30 seconds
 2. When data changes in database
-3. Supabase broadcasts change via WebSocket
+3. Next poll request returns updated data
 4. Client receives update and re-renders UI
 
 ## Security
@@ -109,7 +112,8 @@ Tết Connect được xây dựng theo kiến trúc modern web application vớ
 
 ### Authentication
 - Google OAuth for secure login
-- Session management by Supabase
+- Session management by NextAuth.js
+- Sessions stored in MongoDB
 - Automatic token refresh
 
 ### Environment Variables
@@ -126,8 +130,9 @@ Tết Connect được xây dựng theo kiến trúc modern web application vớ
 
 ### Caching
 - Next.js built-in caching
-- Supabase query caching
+- SWR for client-side data caching
 - Browser caching for static assets
+- MongoDB query result caching
 
 ### Image Optimization
 - Next.js Image component
@@ -178,5 +183,6 @@ npm start
 
 ### Production
 - Vercel Analytics
-- Supabase logs
+- MongoDB Atlas monitoring
+- Vercel logs
 - Error tracking (future: Sentry)

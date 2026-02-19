@@ -96,7 +96,7 @@ import { PostFeedInfinite } from '@/components/posts'
 - Loads 10 posts at a time by default
 - Automatically loads more when user scrolls to bottom
 - Uses IntersectionObserver for efficient scroll detection
-- Maintains realtime updates via Supabase
+- Maintains updates via polling mechanism
 - Shows loading indicator while fetching more posts
 
 **API Support:**

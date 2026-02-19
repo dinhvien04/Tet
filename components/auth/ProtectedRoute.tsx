@@ -13,20 +13,20 @@ export function ProtectedRoute({
   children, 
   redirectTo = '/login' 
 }: ProtectedRouteProps) {
-  const { user, loading } = useAuth()
+  const { user, isLoading } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
-    if (!loading && !user) {
+    if (!isLoading && !user) {
       // Store the current path to redirect back after login
       const currentPath = window.location.pathname
       const redirectUrl = `${redirectTo}?redirect=${encodeURIComponent(currentPath)}`
       router.push(redirectUrl)
     }
-  }, [user, loading, router, redirectTo])
+  }, [user, isLoading, router, redirectTo])
 
   // Show loading state while checking authentication
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">

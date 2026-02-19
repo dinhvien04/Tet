@@ -82,7 +82,9 @@ describe('NotificationDropdown', () => {
       />
     )
 
-    expect(screen.getByText('Đang tải...')).toBeInTheDocument()
+    // Should show skeleton loaders (3 of them)
+    const skeletons = document.querySelectorAll('.animate-pulse')
+    expect(skeletons.length).toBeGreaterThan(0)
   })
 
   it('should call onClose when close button is clicked', () => {

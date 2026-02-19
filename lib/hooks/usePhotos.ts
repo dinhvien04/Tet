@@ -14,6 +14,15 @@ export interface Photo {
   }
 }
 
+// Fetcher function that handles the API response format
+const fetcher = async (url: string) => {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error('Failed to fetch photos')
+  const data = await res.json()
+  // API might return { photos: [...] } or just [...]
+  return Array.isArray(data) ? data : (data.photos || [])
+}
+
 /**
  * Custom hook for fetching and caching photos with SWR
  * Implements automatic revalidation and caching strategies
@@ -21,6 +30,7 @@ export interface Photo {
 export function usePhotos(familyId: string) {
   const { data, error, isLoading, mutate } = useSWR<Photo[]>(
     familyId ? `/api/photos?familyId=${familyId}` : null,
+    fetcher,
     {
       // Photos don't change as frequently, so longer refresh interval
       refreshInterval: 60000, // 1 minute
@@ -28,8 +38,8 @@ export function usePhotos(familyId: string) {
       // Keep previous data while fetching new data
       keepPreviousData: true,
       
-      // Revalidate on focus
-      revalidateOnFocus: true,
+      // Don't revalidate on focus to prevent logout
+      revalidateOnFocus: false,
       
       // Dedupe requests within 5 seconds
       dedupingInterval: 5000,
@@ -37,7 +47,7 @@ export function usePhotos(familyId: string) {
   )
 
   return {
-    photos: data,
+    photos: data || [], // Always return array
     isLoading,
     isError: error,
     mutate,

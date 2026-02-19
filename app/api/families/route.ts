@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { connectDB } from '@/lib/mongodb'
+import Family from '@/lib/models/Family'
+import FamilyMember from '@/lib/models/FamilyMember'
 
 // Generate unique 8-character invite code
 function generateInviteCode(): string {
@@ -13,6 +17,16 @@ function generateInviteCode(): string {
 
 export async function POST(request: NextRequest) {
   try {
+    // Check authentication
+    const session = await getServerSession(authOptions)
+    
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: 'Vui lòng đăng nhập' },
+        { status: 401 }
+      )
+    }
+
     const { name } = await request.json()
 
     // Validate input
@@ -23,17 +37,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Get current user
-    const { data: { session }, error: authError } = await supabase.auth.getSession()
-    
-    if (authError || !session) {
-      return NextResponse.json(
-        { error: 'Vui lòng đăng nhập' },
-        { status: 401 }
-      )
-    }
-
-    const userId = session.user.id
+    await connectDB()
 
     // Generate unique invite code with retry logic
     let inviteCode = generateInviteCode()
@@ -42,11 +46,7 @@ export async function POST(request: NextRequest) {
 
     while (attempts < maxAttempts) {
       // Check if code already exists
-      const { data: existing } = await supabase
-        .from('families')
-        .select('id')
-        .eq('invite_code', inviteCode)
-        .single()
+      const existing = await Family.findOne({ inviteCode })
 
       if (!existing) {
         break // Code is unique
@@ -64,37 +64,23 @@ export async function POST(request: NextRequest) {
     }
 
     // Create family
-    const { data: family, error: familyError } = await supabase
-      .from('families')
-      .insert({
-        name: name.trim(),
-        invite_code: inviteCode,
-        created_by: userId,
-      })
-      .select()
-      .single()
-
-    if (familyError) {
-      console.error('Error creating family:', familyError)
-      return NextResponse.json(
-        { error: 'Không thể tạo nhà' },
-        { status: 500 }
-      )
-    }
+    const family = await Family.create({
+      name: name.trim(),
+      inviteCode,
+      createdBy: session.user.id,
+    })
 
     // Add creator as admin
-    const { error: memberError } = await supabase
-      .from('family_members')
-      .insert({
-        family_id: family.id,
-        user_id: userId,
+    try {
+      await FamilyMember.create({
+        familyId: family._id,
+        userId: session.user.id,
         role: 'admin',
       })
-
-    if (memberError) {
+    } catch (memberError) {
       console.error('Error adding family member:', memberError)
       // Rollback: delete the family
-      await supabase.from('families').delete().eq('id', family.id)
+      await Family.findByIdAndDelete(family._id)
       
       return NextResponse.json(
         { error: 'Không thể thêm thành viên' },
@@ -105,16 +91,81 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       family: {
-        id: family.id,
+        id: family._id.toString(),
         name: family.name,
-        invite_code: family.invite_code,
-        created_at: family.created_at,
+        invite_code: family.inviteCode,
+        created_at: family.createdAt,
       },
     })
   } catch (error) {
     console.error('Unexpected error:', error)
     return NextResponse.json(
       { error: 'Có lỗi xảy ra' },
+      { status: 500 }
+    )
+  }
+}
+
+// GET all families for current user OR get family by invite code
+export async function GET(request: NextRequest) {
+  try {
+    const searchParams = request.nextUrl.searchParams
+    const inviteCode = searchParams.get('inviteCode')
+
+    // If invite code is provided, allow public access (no auth required)
+    if (inviteCode) {
+      await connectDB()
+
+      const family = await Family.findOne({ inviteCode }).lean()
+
+      if (!family) {
+        return NextResponse.json(
+          { error: 'Mã mời không hợp lệ' },
+          { status: 404 }
+        )
+      }
+
+      return NextResponse.json({
+        families: [{
+          id: family._id.toString(),
+          name: family.name,
+          invite_code: family.inviteCode,
+          created_at: family.createdAt,
+        }]
+      })
+    }
+
+    // Otherwise, require authentication to get user's families
+    const session = await getServerSession(authOptions)
+    
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: 'Vui lòng đăng nhập' },
+        { status: 401 }
+      )
+    }
+
+    await connectDB()
+
+    // Get all family memberships for user
+    const memberships = await FamilyMember.find({ userId: session.user.id })
+      .populate('familyId')
+      .lean()
+
+    const families = memberships.map((membership: any) => ({
+      id: membership.familyId._id.toString(),
+      name: membership.familyId.name,
+      invite_code: membership.familyId.inviteCode,
+      role: membership.role,
+      joined_at: membership.joinedAt,
+      created_at: membership.familyId.createdAt,
+    }))
+
+    return NextResponse.json({ families })
+  } catch (error) {
+    console.error('Error fetching families:', error)
+    return NextResponse.json(
+      { error: 'Không thể lấy danh sách nhà' },
       { status: 500 }
     )
   }

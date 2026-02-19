@@ -4,6 +4,7 @@ import { useState, useRef, ChangeEvent, DragEvent } from 'react'
 import { Upload, Camera, X, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
+import Image from 'next/image'
 
 interface PhotoUploaderProps {
   familyId: string
@@ -264,10 +265,13 @@ export function PhotoUploader({ familyId, onUploadSuccess, onUploadError }: Phot
             {/* Preview */}
             <div className="relative rounded-lg overflow-hidden bg-gray-100">
               {previewUrl && (
-                <img
+                <Image
                   src={previewUrl}
                   alt="Preview"
+                  width={1024}
+                  height={1024}
                   className="w-full h-64 object-contain"
+                  unoptimized
                 />
               )}
               

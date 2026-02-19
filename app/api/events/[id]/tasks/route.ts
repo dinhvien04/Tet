@@ -1,155 +1,163 @@
-import { createClient } from '@/lib/supabase'
 import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { connectDB } from '@/lib/mongodb'
+import Event from '@/lib/models/Event'
+import EventTask from '@/lib/models/EventTask'
+import FamilyMember from '@/lib/models/FamilyMember'
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const supabase = createClient()
-    const { id: eventId } = await params
-    
-    // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const { id } = await params
+
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
     }
 
+    const eventId = id
     const body = await request.json()
-    const { task, assigned_to } = body
+    const task = body.task
+    const assignedTo = body.assignedTo || body.assigned_to
 
-    // Validate required fields
-    if (!task || !assigned_to) {
-      return NextResponse.json(
-        { error: 'Missing required fields: task, assigned_to' },
-        { status: 400 }
-      )
+    if (!task || !assignedTo) {
+      return NextResponse.json({ error: 'Thieu thong tin bat buoc' }, { status: 400 })
     }
 
-    // Verify event exists and user is member of the family
-    const { data: event } = await supabase
-      .from('events')
-      .select('family_id')
-      .eq('id', eventId)
-      .single()
+    await connectDB()
 
+    const event = await Event.findById(eventId)
     if (!event) {
-      return NextResponse.json({ error: 'Event not found' }, { status: 404 })
+      return NextResponse.json({ error: 'Su kien khong ton tai' }, { status: 404 })
     }
 
-    const { data: membership } = await supabase
-      .from('family_members')
-      .select('id')
-      .eq('family_id', event.family_id)
-      .eq('user_id', user.id)
-      .single()
-
+    const membership = await FamilyMember.findOne({
+      familyId: event.familyId,
+      userId: session.user.id,
+    })
     if (!membership) {
       return NextResponse.json(
-        { error: 'You are not a member of this family' },
+        { error: 'Ban khong phai thanh vien cua nha nay' },
         { status: 403 }
       )
     }
 
-    // Verify assigned_to user is also a member
-    const { data: assigneeMembership } = await supabase
-      .from('family_members')
-      .select('id')
-      .eq('family_id', event.family_id)
-      .eq('user_id', assigned_to)
-      .single()
-
+    const assigneeMembership = await FamilyMember.findOne({
+      familyId: event.familyId,
+      userId: assignedTo,
+    })
     if (!assigneeMembership) {
       return NextResponse.json(
-        { error: 'Assigned user is not a member of this family' },
+        { error: 'Nguoi duoc phan cong khong phai thanh vien cua nha nay' },
         { status: 400 }
       )
     }
 
-    // Create task
-    const { data: newTask, error } = await supabase
-      .from('event_tasks')
-      .insert({
-        event_id: eventId,
-        task,
-        assigned_to,
-        status: 'pending'
-      })
-      .select('*, users!event_tasks_assigned_to_fkey(id, name, avatar)')
-      .single()
+    const eventTask = await EventTask.create({
+      eventId,
+      task: task.trim(),
+      assignedTo,
+      status: 'pending',
+    })
+    await eventTask.populate('assignedTo', 'name email avatar')
 
-    if (error) {
-      console.error('Error creating task:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    const assignee = eventTask.assignedTo as unknown as {
+      _id: { toString(): string }
+      name: string
+      email: string
+      avatar?: string
     }
 
-    return NextResponse.json(newTask, { status: 201 })
+    return NextResponse.json({
+      success: true,
+      task: {
+        id: eventTask._id.toString(),
+        event_id: eventTask.eventId.toString(),
+        task: eventTask.task,
+        assigned_to: assignee._id.toString(),
+        status: eventTask.status,
+        created_at: eventTask.createdAt,
+        users: {
+          id: assignee._id.toString(),
+          name: assignee.name,
+          email: assignee.email,
+          avatar: assignee.avatar,
+        },
+      },
+    })
   } catch (error) {
-    console.error('Error in POST /api/events/[id]/tasks:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('Error creating task:', error)
+    return NextResponse.json({ error: 'Khong the tao cong viec' }, { status: 500 })
   }
 }
 
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const supabase = createClient()
-    const { id: eventId } = await params
-    
-    // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const { id } = await params
+
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
     }
 
-    // Verify event exists and user is member of the family
-    const { data: event } = await supabase
-      .from('events')
-      .select('family_id')
-      .eq('id', eventId)
-      .single()
+    const eventId = id
 
+    await connectDB()
+
+    const event = await Event.findById(eventId)
     if (!event) {
-      return NextResponse.json({ error: 'Event not found' }, { status: 404 })
+      return NextResponse.json({ error: 'Su kien khong ton tai' }, { status: 404 })
     }
 
-    const { data: membership } = await supabase
-      .from('family_members')
-      .select('id')
-      .eq('family_id', event.family_id)
-      .eq('user_id', user.id)
-      .single()
-
+    const membership = await FamilyMember.findOne({
+      familyId: event.familyId,
+      userId: session.user.id,
+    })
     if (!membership) {
       return NextResponse.json(
-        { error: 'You are not a member of this family' },
+        { error: 'Ban khong phai thanh vien cua nha nay' },
         { status: 403 }
       )
     }
 
-    // Get tasks for this event
-    const { data: tasks, error } = await supabase
-      .from('event_tasks')
-      .select('*, users!event_tasks_assigned_to_fkey(id, name, avatar)')
-      .eq('event_id', eventId)
-      .order('created_at', { ascending: true })
+    const tasks = await EventTask.find({ eventId })
+      .populate('assignedTo', 'name email avatar')
+      .sort({ createdAt: 1 })
+      .lean()
 
-    if (error) {
-      console.error('Error fetching tasks:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    const formattedTasks = tasks.map((taskDoc) => {
+      const assignee = taskDoc.assignedTo as unknown as {
+        _id: { toString(): string }
+        name: string
+        email: string
+        avatar?: string
+      }
 
-    return NextResponse.json(tasks, { status: 200 })
+      return {
+        id: taskDoc._id.toString(),
+        event_id: taskDoc.eventId.toString(),
+        task: taskDoc.task,
+        assigned_to: assignee._id.toString(),
+        status: taskDoc.status,
+        created_at: taskDoc.createdAt,
+        users: {
+          id: assignee._id.toString(),
+          name: assignee.name,
+          email: assignee.email,
+          avatar: assignee.avatar,
+        },
+      }
+    })
+
+    return NextResponse.json({ tasks: formattedTasks })
   } catch (error) {
-    console.error('Error in GET /api/events/[id]/tasks:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('Error fetching tasks:', error)
+    return NextResponse.json({ error: 'Khong the lay danh sach cong viec' }, { status: 500 })
   }
 }

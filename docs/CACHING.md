@@ -5,7 +5,7 @@
 Tết Connect implements a comprehensive caching strategy to improve performance, reduce server load, and provide a better user experience. The caching system uses multiple layers:
 
 1. **SWR (Stale-While-Revalidate)** - Client-side data fetching and caching
-2. **Supabase Query Cache** - In-memory caching for database queries
+2. **MongoDB Query Optimization** - Indexed queries and connection pooling
 3. **Service Worker** - Offline support and asset caching
 
 ## SWR Configuration
@@ -96,41 +96,53 @@ function NotificationBell({ userId }) {
 }
 ```
 
-## Supabase Query Cache
+## MongoDB Query Optimization
 
-### Usage
+### Connection Pooling
+
+MongoDB connection is configured with connection pooling for optimal performance:
 
 ```typescript
-import { cachedQuery, prefetchQuery, supabaseCache } from '@/lib/cache/supabase-cache'
-import { createClient } from '@/lib/supabase'
-
-const supabase = createClient()
-
-// Cached query with 5-minute TTL
-const posts = await cachedQuery(
-  'posts:family-123',
-  () => supabase.from('posts').select('*').eq('family_id', '123'),
-  5 * 60 * 1000
-)
-
-// Prefetch data for faster navigation
-await prefetchQuery(
-  'events:family-123',
-  () => supabase.from('events').select('*').eq('family_id', '123')
-)
-
-// Invalidate cache when data changes
-supabaseCache.invalidate('posts:family-123')
-
-// Invalidate all posts caches
-supabaseCache.invalidatePattern(/^posts:/)
+// lib/mongodb.ts
+const options = {
+  maxPoolSize: 10,      // Maximum connections
+  minPoolSize: 5,       // Minimum connections
+  maxIdleTimeMS: 30000, // Close idle connections after 30s
+}
 ```
 
-### Cache Management
+### Query Optimization
 
-- **Automatic Cleanup**: Expired entries are cleaned up every 5 minutes
-- **Manual Invalidation**: Use `invalidate()` or `invalidatePattern()` to clear cache
-- **TTL Configuration**: Default 5 minutes, customizable per query
+```typescript
+// Use indexes for fast queries
+await Post.find({ familyId: '123' }).sort({ createdAt: -1 }).limit(20)
+
+// Use projection to fetch only needed fields
+await User.findById(userId).select('name email avatar')
+
+// Use lean() for read-only queries (faster)
+const posts = await Post.find({ familyId }).lean()
+```
+
+### Caching with SWR
+
+MongoDB queries are cached on the client-side using SWR:
+
+```typescript
+// Automatic caching and revalidation
+const { data: posts } = usePosts(familyId)
+
+// Manual revalidation
+mutate(`/api/posts?familyId=${familyId}`)
+```
+
+### Best Practices
+
+- **Use Indexes**: Create indexes on frequently queried fields
+- **Limit Results**: Always use `.limit()` for list queries
+- **Use Projection**: Fetch only needed fields with `.select()`
+- **Use Lean**: Use `.lean()` for read-only queries
+- **Connection Pooling**: Reuse connections instead of creating new ones
 
 ## Service Worker
 

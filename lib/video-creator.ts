@@ -188,7 +188,7 @@ export async function createVideoRecap(
     }
     
     ctx = context
-  } catch (error) {
+  } catch {
     throw new Error('Không đủ bộ nhớ để tạo video. Vui lòng thử với ít ảnh hơn hoặc đóng các tab khác.')
   }
 
@@ -236,7 +236,7 @@ export async function createVideoRecap(
       mimeType,
       videoBitsPerSecond: 5000000 // 5 Mbps
     })
-  } catch (error) {
+  } catch {
     throw new Error('Không thể khởi tạo bộ ghi video. Vui lòng thử lại.')
   }
 
@@ -299,8 +299,6 @@ export async function createVideoRecap(
 
   // Stop recording and wait for final data
   return new Promise<VideoCreationResult>((resolve, reject) => {
-    let timeoutId: NodeJS.Timeout
-    
     mediaRecorder.onstop = () => {
       clearTimeout(timeoutId)
       
@@ -362,7 +360,7 @@ export async function createVideoRecap(
 
     // Set timeout to prevent hanging (5 minutes max)
     const maxTimeout = 5 * 60 * 1000
-    timeoutId = setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       if (mediaRecorder.state === 'recording') {
         mediaRecorder.stop()
       }
@@ -381,7 +379,7 @@ export async function createVideoRecap(
     // Stop recording
     try {
       mediaRecorder.stop()
-    } catch (error) {
+    } catch {
       clearTimeout(timeoutId)
       reject(new Error('Không thể dừng ghi video. Vui lòng thử lại.'))
     }

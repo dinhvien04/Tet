@@ -1,6 +1,15 @@
 import useSWR from 'swr'
 import { Post } from '@/components/posts/PostCard'
 
+// Fetcher function that handles the API response format
+const fetcher = async (url: string) => {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error('Failed to fetch posts')
+  const data = await res.json()
+  // API might return { posts: [...] } or just [...]
+  return Array.isArray(data) ? data : (data.posts || [])
+}
+
 /**
  * Custom hook for fetching and caching posts with SWR
  * Implements automatic revalidation and caching strategies
@@ -8,6 +17,7 @@ import { Post } from '@/components/posts/PostCard'
 export function usePosts(familyId: string) {
   const { data, error, isLoading, mutate } = useSWR<Post[]>(
     familyId ? `/api/posts?familyId=${familyId}` : null,
+    fetcher,
     {
       // Revalidate every 30 seconds when tab is focused
       refreshInterval: 30000,
@@ -15,8 +25,8 @@ export function usePosts(familyId: string) {
       // Keep previous data while fetching new data
       keepPreviousData: true,
       
-      // Revalidate on focus
-      revalidateOnFocus: true,
+      // Don't revalidate on focus to prevent logout
+      revalidateOnFocus: false,
       
       // Dedupe requests within 2 seconds
       dedupingInterval: 2000,
@@ -24,7 +34,7 @@ export function usePosts(familyId: string) {
   )
 
   return {
-    posts: data,
+    posts: data || [], // Always return array
     isLoading,
     isError: error,
     mutate,

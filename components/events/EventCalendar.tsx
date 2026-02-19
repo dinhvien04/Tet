@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { Event } from '@/types/database'
 import { EventCard } from './EventCard'
 import { CreateEventForm } from './CreateEventForm'
@@ -25,7 +25,7 @@ export function EventCalendar({ familyId }: EventCalendarProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
 
-  const fetchEvents = async () => {
+  const fetchEvents = useCallback(async () => {
     try {
       const response = await fetch(`/api/events?familyId=${familyId}`)
       
@@ -34,18 +34,19 @@ export function EventCalendar({ familyId }: EventCalendarProps) {
       }
 
       const data = await response.json()
-      setEvents(data)
+      setEvents(data.events || []) // Fix: API returns { events: [...] }
     } catch (error) {
       console.error('Error fetching events:', error)
       toast.error('Không thể tải danh sách sự kiện')
+      setEvents([]) // Set empty array on error
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [familyId])
 
   useEffect(() => {
     fetchEvents()
-  }, [familyId])
+  }, [fetchEvents])
 
   const handleEventCreated = () => {
     setIsDialogOpen(false)

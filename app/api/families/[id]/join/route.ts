@@ -1,102 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { connectDB } from '@/lib/mongodb'
+import Family from '@/lib/models/Family'
+import FamilyMember from '@/lib/models/FamilyMember'
 
 export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { inviteCode } = await request.json()
-    const familyId = params.id
+    const { id } = await params
 
-    // Validate input
-    if (!inviteCode || typeof inviteCode !== 'string') {
-      return NextResponse.json(
-        { error: 'Mã mời không hợp lệ' },
-        { status: 400 }
-      )
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
     }
 
-    // Get current user
-    const { data: { session }, error: authError } = await supabase.auth.getSession()
-    
-    if (authError || !session) {
-      return NextResponse.json(
-        { error: 'Vui lòng đăng nhập' },
-        { status: 401 }
-      )
+    const inviteCode = id.toUpperCase()
+
+    await connectDB()
+
+    const family = await Family.findOne({ inviteCode })
+    if (!family) {
+      return NextResponse.json({ error: 'Ma moi khong hop le' }, { status: 404 })
     }
 
-    const userId = session.user.id
-
-    // Verify family exists and invite code matches
-    const { data: family, error: familyError } = await supabase
-      .from('families')
-      .select('id, name, invite_code')
-      .eq('id', familyId)
-      .eq('invite_code', inviteCode)
-      .single()
-
-    if (familyError || !family) {
-      return NextResponse.json(
-        { error: 'Mã mời không hợp lệ' },
-        { status: 404 }
-      )
-    }
-
-    // Check if user is already a member
-    const { data: existingMember } = await supabase
-      .from('family_members')
-      .select('id')
-      .eq('family_id', familyId)
-      .eq('user_id', userId)
-      .single()
+    const existingMember = await FamilyMember.findOne({
+      familyId: family._id,
+      userId: session.user.id,
+    })
 
     if (existingMember) {
       return NextResponse.json(
-        { error: 'Bạn đã là thành viên của nhà này' },
+        { error: 'Ban da la thanh vien cua nha nay' },
         { status: 400 }
       )
     }
 
-    // Add user as member
-    const { data: member, error: memberError } = await supabase
-      .from('family_members')
-      .insert({
-        family_id: familyId,
-        user_id: userId,
-        role: 'member',
-      })
-      .select()
-      .single()
-
-    if (memberError) {
-      console.error('Error adding family member:', memberError)
-      return NextResponse.json(
-        { error: 'Không thể tham gia nhà' },
-        { status: 500 }
-      )
-    }
+    await FamilyMember.create({
+      familyId: family._id,
+      userId: session.user.id,
+      role: 'member',
+    })
 
     return NextResponse.json({
       success: true,
-      member: {
-        id: member.id,
-        family_id: member.family_id,
-        user_id: member.user_id,
-        role: member.role,
-        joined_at: member.joined_at,
-      },
       family: {
-        id: family.id,
+        id: family._id.toString(),
         name: family.name,
       },
     })
   } catch (error) {
-    console.error('Unexpected error:', error)
-    return NextResponse.json(
-      { error: 'Có lỗi xảy ra' },
-      { status: 500 }
-    )
+    console.error('Error joining family:', error)
+    return NextResponse.json({ error: 'Khong the tham gia nha' }, { status: 500 })
   }
 }

@@ -11,8 +11,12 @@ import { onNetworkChange } from '@/lib/service-worker'
 export function NetworkStatus() {
   const [isOnline, setIsOnline] = useState(true)
   const [showStatus, setShowStatus] = useState(false)
+  const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
+    // Mark as mounted to prevent hydration mismatch
+    setMounted(true)
+    
     // Set initial status
     setIsOnline(navigator.onLine)
 
@@ -29,6 +33,11 @@ export function NetworkStatus() {
 
     return cleanup
   }, [])
+
+  // Don't render until mounted to prevent hydration mismatch
+  if (!mounted) {
+    return null
+  }
 
   // Don't show anything if online and not recently changed
   if (isOnline && !showStatus) {

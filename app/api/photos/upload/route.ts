@@ -1,47 +1,122 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { connectDB } from '@/lib/mongodb'
+import Photo from '@/lib/models/Photo'
+import FamilyMember from '@/lib/models/FamilyMember'
+import cloudinary from '@/lib/cloudinary'
+import { mkdir, writeFile } from 'fs/promises'
+import path from 'path'
+import { randomUUID } from 'crypto'
+
+function isCloudinaryConfigured() {
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME
+  const apiKey = process.env.CLOUDINARY_API_KEY
+  const apiSecret = process.env.CLOUDINARY_API_SECRET
+
+  if (!cloudName || !apiKey || !apiSecret) {
+    return false
+  }
+
+  const placeholderValues = [cloudName, apiKey, apiSecret].map((value) =>
+    value.toLowerCase().trim()
+  )
+
+  return !placeholderValues.some(
+    (value) =>
+      value.startsWith('your-') ||
+      value.includes('placeholder') ||
+      value === 'changeme'
+  )
+}
+
+function getFileExtension(file: File): string {
+  const mimeToExt: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/heic': 'heic',
+    'image/webp': 'webp',
+  }
+
+  return mimeToExt[file.type] || 'jpg'
+}
+
+async function uploadToLocalStorage(file: File, familyId: string) {
+  const bytes = await file.arrayBuffer()
+  const buffer = Buffer.from(bytes)
+  const extension = getFileExtension(file)
+  const safeFamilyId = familyId.replace(/[^a-zA-Z0-9_-]/g, '')
+  const fileName = `${Date.now()}-${randomUUID()}.${extension}`
+  const relativeDir = path.join('uploads', safeFamilyId)
+  const absoluteDir = path.join(process.cwd(), 'public', relativeDir)
+  const absolutePath = path.join(absoluteDir, fileName)
+
+  await mkdir(absoluteDir, { recursive: true })
+  await writeFile(absolutePath, buffer)
+
+  const relativeUrlPath = path.join(relativeDir, fileName).replace(/\\/g, '/')
+
+  return {
+    secure_url: `/${relativeUrlPath}`,
+    public_id: `local:${relativeUrlPath}`,
+  }
+}
+
+async function uploadToCloudinary(file: File, familyId: string) {
+  const bytes = await file.arrayBuffer()
+  const buffer = Buffer.from(bytes)
+
+  return new Promise<any>((resolve, reject) => {
+    cloudinary.uploader
+      .upload_stream(
+        {
+          folder: `tet-connect/${familyId}`,
+          resource_type: 'auto',
+        },
+        (error, result) => {
+          if (error) reject(error)
+          else resolve(result)
+        }
+      )
+      .end(buffer)
+  })
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = createClient()
-    
     // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const session = await getServerSession(authOptions)
+    
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: 'Vui lòng đăng nhập' },
+        { status: 401 }
+      )
     }
 
-    // Parse form data
     const formData = await request.formData()
     const file = formData.get('file') as File
     const familyId = formData.get('familyId') as string
 
-    // Validate required fields
-    if (!file) {
+    // Validate input
+    if (!file || !familyId) {
       return NextResponse.json(
-        { error: 'Missing file' },
-        { status: 400 }
-      )
-    }
-
-    if (!familyId) {
-      return NextResponse.json(
-        { error: 'Missing familyId' },
+        { error: 'Thiếu file hoặc familyId' },
         { status: 400 }
       )
     }
 
     // Validate file type
-    const validTypes = ['image/jpeg', 'image/png', 'image/heic']
+    const validTypes = ['image/jpeg', 'image/png', 'image/heic', 'image/webp']
     if (!validTypes.includes(file.type)) {
       return NextResponse.json(
-        { error: 'Định dạng file không hợp lệ. Chỉ chấp nhận JPG, PNG, HEIC.' },
+        { error: 'Định dạng file không hợp lệ. Chỉ chấp nhận JPG, PNG, HEIC, WEBP.' },
         { status: 400 }
       )
     }
 
     // Validate file size (10MB max)
-    const maxSize = 10 * 1024 * 1024 // 10MB in bytes
+    const maxSize = 10 * 1024 * 1024 // 10MB
     if (file.size > maxSize) {
       return NextResponse.json(
         { error: 'File quá lớn. Kích thước tối đa 10MB.' },
@@ -49,91 +124,61 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Verify user is member of the family
-    const { data: membership } = await supabase
-      .from('family_members')
-      .select('id')
-      .eq('family_id', familyId)
-      .eq('user_id', user.id)
-      .single()
+    await connectDB()
+
+    // Check if user is a member of this family
+    const membership = await FamilyMember.findOne({
+      familyId,
+      userId: session.user.id,
+    })
 
     if (!membership) {
       return NextResponse.json(
-        { error: 'You are not a member of this family' },
+        { error: 'Bạn không phải thành viên của nhà này' },
         { status: 403 }
       )
     }
 
-    // Upload file to Supabase Storage
-    const fileName = `${familyId}/${Date.now()}-${file.name}`
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('photos')
-      .upload(fileName, file, {
-        contentType: file.type,
-        cacheControl: '3600',
-        upsert: false
-      })
+    const uploadResult = isCloudinaryConfigured()
+      ? await uploadToCloudinary(file, familyId)
+      : await uploadToLocalStorage(file, familyId)
 
-    if (uploadError) {
-      console.error('Error uploading file:', uploadError)
-      
-      // Handle specific storage errors
-      if (uploadError.message.includes('quota')) {
-        return NextResponse.json(
-          { error: 'Dung lượng lưu trữ đã đầy. Vui lòng xóa ảnh cũ.' },
-          { status: 507 }
-        )
-      }
-      
-      return NextResponse.json(
-        { error: 'Failed to upload file' },
-        { status: 500 }
-      )
+    // Save photo metadata to MongoDB
+    const photo = await Photo.create({
+      familyId,
+      userId: session.user.id,
+      url: uploadResult.secure_url,
+      publicId: uploadResult.public_id,
+    })
+
+    await photo.populate('userId', 'name email avatar')
+    const user = photo.userId as unknown as {
+      _id: { toString(): string }
+      name: string
+      email: string
+      avatar?: string | null
     }
 
-    // Get public URL
-    const { data: { publicUrl } } = supabase.storage
-      .from('photos')
-      .getPublicUrl(fileName)
-
-    // Save metadata to database
-    const { data: photo, error: dbError } = await supabase
-      .from('photos')
-      .insert({
-        family_id: familyId,
-        user_id: user.id,
-        url: publicUrl
-      })
-      .select(`
-        *,
-        users (
-          id,
-          name,
-          avatar,
-          email
-        )
-      `)
-      .single()
-
-    if (dbError) {
-      console.error('Error saving photo metadata:', dbError)
-      
-      // Try to clean up uploaded file
-      await supabase.storage
-        .from('photos')
-        .remove([fileName])
-      
-      return NextResponse.json(
-        { error: 'Failed to save photo metadata' },
-        { status: 500 }
-      )
-    }
-
-    return NextResponse.json(photo, { status: 201 })
+    return NextResponse.json({
+      success: true,
+      photo: {
+        id: photo._id.toString(),
+        family_id: photo.familyId.toString(),
+        user_id: user._id.toString(),
+        url: photo.url,
+        uploaded_at: photo.uploadedAt,
+        uploader: {
+          id: user._id.toString(),
+          name: user.name,
+          email: user.email,
+          avatar: user.avatar ?? null,
+        },
+      },
+    })
   } catch (error) {
-    console.error('Unexpected error:', error)
+    console.error('Error uploading photo:', error)
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Không thể upload ảnh' },
       { status: 500 }
     )
   }

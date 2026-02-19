@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { User } from '@/types/database'
 import { VideoRecapButton } from './VideoRecapButton'
 import { PhotoSelector } from './PhotoSelector'
 import { VideoProcessingStatus, ProcessingStatus } from './VideoProcessingStatus'
@@ -9,13 +8,20 @@ import { VideoPreview } from './VideoPreview'
 import { createVideoRecap, blobToBase64, isVideoCreationSupported } from '@/lib/video-creator'
 import { toast } from 'sonner'
 
+interface PhotoUser {
+  id: string
+  name: string
+  email?: string
+  avatar?: string | null
+}
+
 interface Photo {
   id: string
   family_id: string
   user_id: string
   url: string
   uploaded_at: string
-  users?: User
+  users?: PhotoUser
 }
 
 interface VideoRecapCreatorProps {

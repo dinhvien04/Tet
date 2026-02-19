@@ -3,7 +3,7 @@
 import { Home, Calendar, Image, Users, LogOut } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useAuth } from '@/components/auth/AuthProvider'
+import { useAuth } from '@/lib/hooks/useAuth'
 import { FamilySelector } from '@/components/family/FamilySelector'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -46,7 +46,7 @@ export function MobileMenu({ isOpen, onClose }: MobileMenuProps) {
         <div className="p-6 border-b">
           <p className="text-sm text-gray-600">Xin chào,</p>
           <p className="font-medium truncate">
-            {user?.user_metadata?.full_name || user?.email}
+            {user?.name || user?.email}
           </p>
         </div>
 

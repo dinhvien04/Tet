@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { EventTask } from '@/types/database'
 import { TaskItem } from './TaskItem'
 import { toast } from 'sonner'
@@ -17,32 +17,32 @@ export function TaskList({ eventId, currentUserId, refreshTrigger }: TaskListPro
   const [tasks, setTasks] = useState<EventTask[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
-  const fetchTasks = async () => {
+  const fetchTasks = useCallback(async () => {
     try {
       const response = await fetch(`/api/events/${eventId}/tasks`)
-      
       if (!response.ok) {
-        throw new Error('Không thể tải danh sách công việc')
+        throw new Error('Khong the tai danh sach cong viec')
       }
 
       const data = await response.json()
-      setTasks(data)
+      const taskList = Array.isArray(data) ? data : data.tasks || []
+      setTasks(taskList)
     } catch (error) {
       console.error('Error fetching tasks:', error)
-      toast.error('Không thể tải danh sách công việc')
+      toast.error('Khong the tai danh sach cong viec')
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [eventId])
 
   useEffect(() => {
-    fetchTasks()
-  }, [eventId, refreshTrigger])
+    void fetchTasks()
+  }, [fetchTasks, refreshTrigger])
 
   if (isLoading) {
     return (
       <div className="flex justify-center py-6">
-        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-900"></div>
+        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-900" />
       </div>
     )
   }
@@ -51,22 +51,22 @@ export function TaskList({ eventId, currentUserId, refreshTrigger }: TaskListPro
     return (
       <EmptyState
         icon={CheckSquare}
-        title="Chưa có công việc nào"
-        description="Thêm công việc để phân công cho các thành viên"
+        title="Chua co cong viec nao"
+        description="Them cong viec de phan cong cho cac thanh vien"
         className="py-6"
       />
     )
   }
 
-  const pendingTasks = tasks.filter(t => t.status === 'pending')
-  const completedTasks = tasks.filter(t => t.status === 'completed')
+  const pendingTasks = tasks.filter((t) => t.status === 'pending')
+  const completedTasks = tasks.filter((t) => t.status === 'completed')
 
   return (
     <div className="space-y-4">
       {pendingTasks.length > 0 && (
         <div>
           <h4 className="text-sm font-semibold text-gray-700 mb-2">
-            Chưa hoàn thành ({pendingTasks.length})
+            Chua hoan thanh ({pendingTasks.length})
           </h4>
           <div className="space-y-2">
             {pendingTasks.map((task) => (
@@ -84,7 +84,7 @@ export function TaskList({ eventId, currentUserId, refreshTrigger }: TaskListPro
       {completedTasks.length > 0 && (
         <div>
           <h4 className="text-sm font-semibold text-gray-700 mb-2">
-            Đã hoàn thành ({completedTasks.length})
+            Da hoan thanh ({completedTasks.length})
           </h4>
           <div className="space-y-2">
             {completedTasks.map((task) => (

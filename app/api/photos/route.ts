@@ -1,21 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { connectDB } from '@/lib/mongodb'
+import Photo from '@/lib/models/Photo'
+import FamilyMember from '@/lib/models/FamilyMember'
 
 export async function GET(request: NextRequest) {
   try {
-    const supabase = createClient()
-    
     // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    await connectDB()
 
     // Get familyId from query params
     const searchParams = request.nextUrl.searchParams
     const familyId = searchParams.get('familyId')
     const from = parseInt(searchParams.get('from') || '0')
-    const to = parseInt(searchParams.get('to') || '19')
+    const limit = parseInt(searchParams.get('to') || '19') - from + 1
 
     if (!familyId) {
       return NextResponse.json(
@@ -25,12 +29,10 @@ export async function GET(request: NextRequest) {
     }
 
     // Verify user is member of the family
-    const { data: membership } = await supabase
-      .from('family_members')
-      .select('id')
-      .eq('family_id', familyId)
-      .eq('user_id', user.id)
-      .single()
+    const membership = await FamilyMember.findOne({
+      familyId,
+      userId: session.user.id,
+    })
 
     if (!membership) {
       return NextResponse.json(
@@ -40,30 +42,42 @@ export async function GET(request: NextRequest) {
     }
 
     // Get photos with user info, ordered by upload time (newest first) with pagination
-    const { data: photos, error: photosError } = await supabase
-      .from('photos')
-      .select(`
-        *,
-        users (
-          id,
-          name,
-          avatar,
-          email
-        )
-      `)
-      .eq('family_id', familyId)
-      .order('uploaded_at', { ascending: false })
-      .range(from, to)
+    const photos = await Photo.find({ familyId })
+      .populate('userId', 'name email avatar')
+      .sort({ uploadedAt: -1 })
+      .skip(from)
+      .limit(limit)
+      .lean()
 
-    if (photosError) {
-      console.error('Error fetching photos:', photosError)
-      return NextResponse.json(
-        { error: 'Failed to fetch photos' },
-        { status: 500 }
-      )
-    }
+    const formattedPhotos = photos.map((photo) => {
+      const user = photo.userId as unknown as {
+        _id: { toString(): string }
+        name: string
+        email: string
+        avatar?: string | null
+      }
 
-    return NextResponse.json(photos || [], { status: 200 })
+      return {
+        id: photo._id.toString(),
+        url: photo.url,
+        family_id: photo.familyId.toString(),
+        user_id: user._id.toString(),
+        uploaded_at: photo.uploadedAt,
+        cloudinary_public_id: photo.publicId,
+        // Backward-compatible camelCase keys
+        familyId: photo.familyId.toString(),
+        userId: user._id.toString(),
+        uploadedAt: photo.uploadedAt,
+        users: {
+          id: user._id.toString(),
+          name: user.name,
+          email: user.email,
+          avatar: user.avatar ?? null,
+        },
+      }
+    })
+
+    return NextResponse.json(formattedPhotos, { status: 200 })
   } catch (error) {
     console.error('Unexpected error:', error)
     return NextResponse.json(

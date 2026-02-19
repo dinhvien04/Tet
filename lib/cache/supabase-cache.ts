@@ -1,5 +1,3 @@
-import { createClient } from '@/lib/supabase'
-
 /**
  * Cache configuration for Supabase queries
  * Implements in-memory caching with TTL (Time To Live)

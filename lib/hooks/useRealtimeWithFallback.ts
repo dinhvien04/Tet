@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase'
-import type { RealtimeChannel } from '@supabase/supabase-js'
+import type {
+  RealtimeChannel,
+  RealtimePostgresChangesPayload,
+  REALTIME_SUBSCRIBE_STATES,
+} from '@supabase/supabase-js'
 
 interface UseRealtimeWithFallbackOptions<T> {
   channelName: string
   table: string
   filter?: string
-  onInsert?: (payload: any) => void
-  onUpdate?: (payload: any) => void
-  onDelete?: (payload: any) => void
+  onInsert?: (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => void
+  onUpdate?: (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => void
+  onDelete?: (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => void
   pollInterval?: number // milliseconds, default 5000
   fetchData: () => Promise<T>
 }
@@ -92,7 +96,7 @@ export function useRealtimeWithFallback<T>({
             table,
             ...(filter && { filter }),
           },
-          (payload) => {
+          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
             if (isMountedRef.current) {
               onInsert(payload)
               setStatus(prev => ({ ...prev, lastUpdate: new Date() }))
@@ -111,7 +115,7 @@ export function useRealtimeWithFallback<T>({
             table,
             ...(filter && { filter }),
           },
-          (payload) => {
+          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
             if (isMountedRef.current) {
               onUpdate(payload)
               setStatus(prev => ({ ...prev, lastUpdate: new Date() }))
@@ -130,7 +134,7 @@ export function useRealtimeWithFallback<T>({
             table,
             ...(filter && { filter }),
           },
-          (payload) => {
+          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
             if (isMountedRef.current) {
               onDelete(payload)
               setStatus(prev => ({ ...prev, lastUpdate: new Date() }))
@@ -140,7 +144,7 @@ export function useRealtimeWithFallback<T>({
       }
 
       // Subscribe with status callback
-      channel.subscribe((status, error) => {
+      channel.subscribe((status: REALTIME_SUBSCRIBE_STATES, error?: Error) => {
         if (!isMountedRef.current) return
 
         if (status === 'SUBSCRIBED') {

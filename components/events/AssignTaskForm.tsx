@@ -12,7 +12,12 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { toast } from 'sonner'
-import { FamilyMember } from '@/types/database'
+
+interface FamilyMemberOption {
+  user_id: string
+  name?: string
+  users?: { id: string; name: string }
+}
 
 interface AssignTaskFormProps {
   eventId: string
@@ -23,19 +28,19 @@ interface AssignTaskFormProps {
 export function AssignTaskForm({ eventId, familyId, onTaskCreated }: AssignTaskFormProps) {
   const [task, setTask] = useState('')
   const [assignedTo, setAssignedTo] = useState('')
-  const [members, setMembers] = useState<(FamilyMember & { users: { id: string; name: string } })[]>([])
+  const [members, setMembers] = useState<FamilyMemberOption[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isFetchingMembers, setIsFetchingMembers] = useState(true)
 
   useEffect(() => {
-    const fetchMembers = async () => {
+    async function fetchMembers() {
       try {
         const response = await fetch(`/api/families/${familyId}/members`)
-        
-        if (response.ok) {
-          const data = await response.json()
-          setMembers(data)
-        }
+        if (!response.ok) return
+
+        const data = await response.json()
+        const memberList = Array.isArray(data) ? data : data.members || []
+        setMembers(memberList)
       } catch (error) {
         console.error('Error fetching members:', error)
       } finally {
@@ -43,14 +48,14 @@ export function AssignTaskForm({ eventId, familyId, onTaskCreated }: AssignTaskF
       }
     }
 
-    fetchMembers()
+    void fetchMembers()
   }, [familyId])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (!task.trim() || !assignedTo) {
-      toast.error('Vui lòng nhập mô tả công việc và chọn người phụ trách')
+      toast.error('Vui long nhap mo ta cong viec va chon nguoi phu trach')
       return
     }
 
@@ -62,25 +67,22 @@ export function AssignTaskForm({ eventId, familyId, onTaskCreated }: AssignTaskF
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           task: task.trim(),
-          assigned_to: assignedTo
-        })
+          assignedTo,
+        }),
       })
 
       if (!response.ok) {
         const error = await response.json()
-        throw new Error(error.error || 'Không thể tạo công việc')
+        throw new Error(error.error || 'Khong the tao cong viec')
       }
 
-      toast.success('Đã phân công công việc thành công!')
+      toast.success('Da phan cong cong viec thanh cong!')
       setTask('')
       setAssignedTo('')
-      
-      if (onTaskCreated) {
-        onTaskCreated()
-      }
+      onTaskCreated?.()
     } catch (error) {
       console.error('Error creating task:', error)
-      toast.error(error instanceof Error ? error.message : 'Có lỗi xảy ra')
+      toast.error(error instanceof Error ? error.message : 'Co loi xay ra')
     } finally {
       setIsLoading(false)
     }
@@ -89,40 +91,43 @@ export function AssignTaskForm({ eventId, familyId, onTaskCreated }: AssignTaskF
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <Label htmlFor="task">Mô tả công việc *</Label>
+        <Label htmlFor="task">Mo ta cong viec *</Label>
         <Input
           id="task"
           type="text"
           value={task}
           onChange={(e) => setTask(e.target.value)}
-          placeholder="Ví dụ: Chuẩn bị mâm cỗ, Dọn dẹp nhà cửa"
+          placeholder="Vi du: Chuan bi mam co, Don dep nha cua"
           required
           disabled={isLoading}
         />
       </div>
 
       <div>
-        <Label htmlFor="assignedTo">Người phụ trách *</Label>
+        <Label htmlFor="assignedTo">Nguoi phu trach *</Label>
         <Select
           value={assignedTo}
           onValueChange={setAssignedTo}
           disabled={isLoading || isFetchingMembers}
         >
           <SelectTrigger>
-            <SelectValue placeholder="Chọn thành viên" />
+            <SelectValue placeholder="Chon thanh vien" />
           </SelectTrigger>
           <SelectContent>
-            {members.map((member) => (
-              <SelectItem key={member.user_id} value={member.user_id}>
-                {member.users.name}
-              </SelectItem>
-            ))}
+            {members.map((member) => {
+              const memberName = member.name || member.users?.name || 'Thanh vien'
+              return (
+                <SelectItem key={member.user_id} value={member.user_id}>
+                  {memberName}
+                </SelectItem>
+              )
+            })}
           </SelectContent>
         </Select>
       </div>
 
       <Button type="submit" disabled={isLoading || isFetchingMembers} className="w-full">
-        {isLoading ? 'Đang tạo...' : 'Phân công'}
+        {isLoading ? 'Dang tao...' : 'Phan cong'}
       </Button>
     </form>
   )

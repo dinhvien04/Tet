@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 import { Family } from '@/types/database'
 import { useFamilies } from '@/lib/hooks/useFamilies'
-import { useAuth } from '@/components/auth/AuthProvider'
+import { useAuth } from '@/lib/hooks/useAuth'
 
 interface FamilyContextType {
   currentFamily: Family | null
@@ -19,25 +19,33 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const { families, loading, error } = useFamilies(user?.id)
   const [currentFamily, setCurrentFamilyState] = useState<Family | null>(null)
+  const [mounted, setMounted] = useState(false)
+
+  // Mark as mounted
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   // Auto-select first family when families load
   useEffect(() => {
-    if (families.length > 0 && !currentFamily) {
-      // Try to load from localStorage first
-      const savedFamilyId = localStorage.getItem('currentFamilyId')
-      const savedFamily = families.find((f) => f.id === savedFamilyId)
-      
-      if (savedFamily) {
-        setCurrentFamilyState(savedFamily)
-      } else {
-        setCurrentFamilyState(families[0])
-      }
+    if (!mounted || families.length === 0 || currentFamily) return
+    
+    // Try to load from localStorage first
+    const savedFamilyId = localStorage.getItem('currentFamilyId')
+    const savedFamily = families.find((f) => f.id === savedFamilyId)
+    
+    if (savedFamily) {
+      setCurrentFamilyState(savedFamily)
+    } else {
+      setCurrentFamilyState(families[0])
     }
-  }, [families, currentFamily])
+  }, [families, currentFamily, mounted])
 
   const setCurrentFamily = (family: Family) => {
     setCurrentFamilyState(family)
-    localStorage.setItem('currentFamilyId', family.id)
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('currentFamilyId', family.id)
+    }
   }
 
   return (

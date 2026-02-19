@@ -6,7 +6,6 @@ import { Heart, Laugh } from 'lucide-react'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
-import { toast } from 'sonner'
 
 export interface Post {
   id: string

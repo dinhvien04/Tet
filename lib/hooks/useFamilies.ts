@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
 import { Family } from '@/types/database'
 
 export function useFamilies(userId: string | undefined) {
@@ -21,32 +20,14 @@ export function useFamilies(userId: string | undefined) {
         setLoading(true)
         setError(null)
 
-        // Get families where user is a member
-        const { data: memberData, error: memberError } = await supabase
-          .from('family_members')
-          .select('family_id')
-          .eq('user_id', userId)
-
-        if (memberError) throw memberError
-
-        if (!memberData || memberData.length === 0) {
-          setFamilies([])
-          setLoading(false)
-          return
+        const response = await fetch('/api/families')
+        
+        if (!response.ok) {
+          throw new Error('Failed to fetch families')
         }
 
-        const familyIds = memberData.map((m) => m.family_id)
-
-        // Get family details
-        const { data: familiesData, error: familiesError } = await supabase
-          .from('families')
-          .select('*')
-          .in('id', familyIds)
-          .order('created_at', { ascending: false })
-
-        if (familiesError) throw familiesError
-
-        setFamilies(familiesData || [])
+        const data = await response.json()
+        setFamilies(data.families || [])
       } catch (err) {
         console.error('Error fetching families:', err)
         setError('Không thể tải danh sách nhà')
