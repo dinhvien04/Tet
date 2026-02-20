@@ -5,6 +5,7 @@ export interface User {
   email: string
   name: string
   avatar?: string
+  role?: 'user' | 'admin'
   created_at: string
 }
 

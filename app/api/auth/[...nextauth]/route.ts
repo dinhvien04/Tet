@@ -6,40 +6,72 @@ import clientPromise from '@/lib/mongodb'
 import { connectDB } from '@/lib/mongodb'
 import User from '@/lib/models/User'
 import { verifyPassword } from '@/lib/auth'
+import { getDefaultRoleForEmail } from '@/lib/system-admin'
+
+async function resolveAndSyncRole(email?: string | null) {
+  if (!email) {
+    return { id: '', role: 'user' as const }
+  }
+
+  await connectDB()
+
+  const normalizedEmail = email.toLowerCase()
+  const dbUser = await User.findOne({ email: normalizedEmail }).select('_id email role')
+
+  if (!dbUser) {
+    return {
+      id: '',
+      role: getDefaultRoleForEmail(normalizedEmail),
+    }
+  }
+
+  const resolvedRole = dbUser.role || getDefaultRoleForEmail(dbUser.email)
+
+  if (dbUser.role !== resolvedRole) {
+    dbUser.role = resolvedRole
+    await dbUser.save()
+  }
+
+  return {
+    id: dbUser._id.toString(),
+    role: resolvedRole,
+  }
+}
 
 export const authOptions: NextAuthOptions = {
-  adapter: MongoDBAdapter(clientPromise) as any, // Type compatibility fix for @auth/mongodb-adapter
+  adapter: MongoDBAdapter(clientPromise) as any,
   providers: [
     CredentialsProvider({
       name: 'Credentials',
       credentials: {
-        email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" }
+        email: { label: 'Email', type: 'email' },
+        password: { label: 'Password', type: 'password' },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
-          throw new Error('Email và mật khẩu là bắt buộc')
+          throw new Error('Email va mat khau la bat buoc')
         }
 
         await connectDB()
 
-        // Find user by email
         const user = await User.findOne({ email: credentials.email.toLowerCase() })
-        
         if (!user) {
-          throw new Error('Email hoặc mật khẩu không đúng')
+          throw new Error('Email hoac mat khau khong dung')
         }
 
-        // Check if user registered with credentials (not OAuth)
         if (user.provider !== 'credentials' || !user.password) {
-          throw new Error('Tài khoản này đăng ký bằng Google. Vui lòng đăng nhập bằng Google.')
+          throw new Error('Tai khoan nay dang ky bang Google. Vui long dang nhap bang Google.')
         }
 
-        // Verify password
         const isValid = await verifyPassword(credentials.password, user.password)
-        
         if (!isValid) {
-          throw new Error('Email hoặc mật khẩu không đúng')
+          throw new Error('Email hoac mat khau khong dung')
+        }
+
+        const resolvedRole = user.role || getDefaultRoleForEmail(user.email)
+        if (user.role !== resolvedRole) {
+          user.role = resolvedRole
+          await user.save()
         }
 
         return {
@@ -47,8 +79,9 @@ export const authOptions: NextAuthOptions = {
           email: user.email,
           name: user.name,
           image: user.avatar,
+          role: resolvedRole,
         }
-      }
+      },
     }),
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID || '',
@@ -57,18 +90,18 @@ export const authOptions: NextAuthOptions = {
   ],
   session: {
     strategy: 'jwt',
-    maxAge: 30 * 24 * 60 * 60, // 30 days - very long for development
-    updateAge: 24 * 60 * 60, // Update session every 24 hours
+    maxAge: 30 * 24 * 60 * 60,
+    updateAge: 24 * 60 * 60,
   },
   cookies: {
     sessionToken: {
-      name: `next-auth.session-token`,
+      name: 'next-auth.session-token',
       options: {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
         secure: process.env.NODE_ENV === 'production',
-        maxAge: 30 * 24 * 60 * 60, // 30 days
+        maxAge: 30 * 24 * 60 * 60,
       },
     },
   },
@@ -78,42 +111,60 @@ export const authOptions: NextAuthOptions = {
   },
   callbacks: {
     async signIn({ user, profile }) {
-      // For Google OAuth, ensure user is created with correct provider
       if (profile && user.email) {
         await connectDB()
-        
-        const existingUser = await User.findOne({ email: user.email })
-        
+
+        const normalizedEmail = user.email.toLowerCase()
+        const existingUser = await User.findOne({ email: normalizedEmail })
+
         if (!existingUser) {
-          // Create new user with Google provider
+          const role = getDefaultRoleForEmail(normalizedEmail)
           await User.create({
-            email: user.email,
+            email: normalizedEmail,
             name: user.name || profile.name,
             avatar: user.image || (profile as any).picture,
             provider: 'google',
+            role,
           })
         } else if (existingUser.provider === 'credentials') {
-          // User exists with credentials, don't allow Google login
           return false
+        } else {
+          const resolvedRole = existingUser.role || getDefaultRoleForEmail(existingUser.email)
+          if (existingUser.role !== resolvedRole) {
+            existingUser.role = resolvedRole
+            await existingUser.save()
+          }
         }
       }
-      
+
       return true
     },
     async jwt({ token, user }) {
-      // Add user ID to token on sign in
       if (user) {
-        token.id = user.id
+        token.id = user.id || token.id
+        token.role = user.role || token.role
       }
-      
+
+      if (token.email) {
+        const resolvedUser = await resolveAndSyncRole(token.email)
+
+        if (resolvedUser.id) {
+          token.id = resolvedUser.id
+        }
+
+        token.role = resolvedUser.role
+      } else if (!token.role) {
+        token.role = 'user'
+      }
+
       return token
     },
     async session({ session, token }) {
-      // Add user ID to session
       if (session.user) {
-        session.user.id = token.id as string
+        session.user.id = (token.id as string) || ''
+        session.user.role = (token.role as 'user' | 'admin') || 'user'
       }
-      
+
       return session
     },
   },

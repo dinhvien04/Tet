@@ -1,4 +1,5 @@
 import mongoose, { Schema, Model } from 'mongoose'
+import { UserRole } from '@/lib/system-admin'
 
 export interface IUser {
   _id: mongoose.Types.ObjectId
@@ -6,6 +7,7 @@ export interface IUser {
   password?: string // Optional for OAuth users
   name: string
   avatar?: string
+  role: UserRole
   provider: 'credentials' | 'google'
   createdAt: Date
   updatedAt: Date
@@ -34,6 +36,12 @@ const UserSchema = new Schema<IUser>(
     },
     avatar: {
       type: String,
+    },
+    role: {
+      type: String,
+      enum: ['user', 'admin'],
+      default: 'user',
+      index: true,
     },
     provider: {
       type: String,

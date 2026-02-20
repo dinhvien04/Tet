@@ -1,6 +1,6 @@
 'use client'
 
-import { Home, Calendar, Image, Users, LogOut, Dice5 } from 'lucide-react'
+import { Home, Calendar, Image, Users, LogOut, Dice5, ShieldCheck } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/hooks/useAuth'
@@ -14,7 +14,7 @@ interface SidebarProps {
 
 export function Sidebar({ className }: SidebarProps) {
   const pathname = usePathname()
-  const { signOut } = useAuth()
+  const { user, signOut } = useAuth()
 
   const navItems = [
     { href: '/dashboard', label: 'Trang chu', icon: Home },
@@ -23,6 +23,10 @@ export function Sidebar({ className }: SidebarProps) {
     { href: '/games/bau-cua', label: 'Bau cua', icon: Dice5 },
     { href: '/family', label: 'Gia dinh', icon: Users },
   ]
+
+  if (user?.role === 'admin') {
+    navItems.push({ href: '/admin', label: 'Quan tri web', icon: ShieldCheck })
+  }
 
   return (
     <aside className={cn('flex flex-col h-full bg-white border-r', className)}>

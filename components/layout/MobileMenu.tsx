@@ -1,6 +1,6 @@
 'use client'
 
-import { Home, Calendar, Image, Users, LogOut, Dice5 } from 'lucide-react'
+import { Home, Calendar, Image, Users, LogOut, Dice5, ShieldCheck } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/hooks/useAuth'
@@ -24,6 +24,10 @@ export function MobileMenu({ isOpen, onClose }: MobileMenuProps) {
     { href: '/games/bau-cua', label: 'Bau cua', icon: Dice5 },
     { href: '/family', label: 'Gia dinh', icon: Users },
   ]
+
+  if (user?.role === 'admin') {
+    navItems.push({ href: '/admin', label: 'Quan tri web', icon: ShieldCheck })
+  }
 
   const handleSignOut = async () => {
     await signOut()

@@ -1,87 +1,86 @@
-# Tết Connect 🎊
+# Tet Connect
 
-Ứng dụng web giúp các gia đình Việt Nam kết nối và tổ chức hoạt động dịp Tết: tạo nhà riêng, đăng bài, lịch sự kiện, album ảnh, video recap và mini game.
+Tet Connect la ung dung web giup gia dinh Viet Nam ket noi trong dip Tet.
 
-## ✨ Tính năng chính
+## Main Features
 
-### 🤖 AI nội dung Tết
-- Tạo câu đối, lời chúc, thiệp Tết bằng AI
-- Cá nhân hóa theo người nhận và đặc điểm
-- Đăng trực tiếp lên tường nhà
+### AI Content
+- Tao cau doi, loi chuc, thiep Tet bang AI
+- Dang thang noi dung len tuong nha
 
-### 📅 Sự kiện gia đình
-- Tạo sự kiện theo ngày giờ
-- Phân công nhiệm vụ cho thành viên
-- Theo dõi trạng thái hoàn thành
+### Family Events
+- Tao su kien
+- Phan cong nhiem vu
+- Theo doi tien do hoan thanh
 
-### 📸 Album ảnh chung
-- Upload ảnh theo nhà (family)
-- Xem theo timeline
-- Tạo video recap từ ảnh
+### Photo Album
+- Upload anh theo family
+- Xem timeline anh
+- Tao video recap
 
-### 💬 Bài đăng tương tác
-- Đăng bài theo chủ đề Tết
-- Thả tim / haha
-- Bình luận trực tiếp dưới bài viết
+### Posts
+- Dang bai theo chu de Tet
+- Tha tim / haha
+- Binh luan truc tiep duoi bai
 
-### 🎮 Bầu Cua Online
-- Bàn chơi theo từng gia đình
-- Cược điểm ảo (không tiền thật)
-- Quay 3 xúc xắc, tính thắng/thua tự động
-- Bảng xếp hạng điểm
+### Bau Cua Online
+- Ban choi rieng cho tung gia dinh
+- Cuoc diem ao (khong tien that)
+- Quay 3 xuc xac va tinh ket qua tu dong
 
-## 🎮 Bau Cua Online (MVP)
+### Family Admin Management
+- Family creator duoc gan role `admin`
+- Admin co the cap quyen admin cho thanh vien
+- Admin co the ha quyen admin thanh member
+- Admin co the xoa thanh vien khoi gia dinh
+- He thong chan thao tac lam mat admin cuoi cung
 
-### Route
+### System Admin Management
+- Co trang quan tri web tai `/admin`
+- Chi user co role `admin` moi vao duoc
+- Admin co the promote/demote role cua user toan he thong
+- Co thong ke tong users, families, posts, events, photos
+
+## Bau Cua Routes
 - UI: `/games/bau-cua`
+- API:
+  - `GET /api/games/bau-cua?familyId=...`
+  - `POST /api/games/bau-cua/start`
+  - `POST /api/games/bau-cua/bet`
+  - `POST /api/games/bau-cua/roll`
 
-### API
-- `GET /api/games/bau-cua?familyId=...`
-  - Lấy trạng thái bàn: round, ví điểm, tổng cược, cược của bạn, leaderboard
-- `POST /api/games/bau-cua/start`
-  - Mở ván mới (status `betting`)
-- `POST /api/games/bau-cua/bet`
-  - Đặt cược theo cửa: `bau|cua|tom|ca|ga|nai`
-- `POST /api/games/bau-cua/roll`
-  - Quay xúc xắc, chốt kết quả, cập nhật ví
+## Family Member Admin API
+- `GET /api/families/:id/members`
+- `PATCH /api/families/:id/members`
+  - body: `{ "memberId": "...", "role": "admin|member" }`
+- `DELETE /api/families/:id/members?memberId=...`
 
-### Luật tính điểm
-- Cửa không xuất hiện trong 3 mặt: thua toàn bộ điểm đặt cửa đó
-- Cửa xuất hiện `n` lần: nhận `n x amount` cho cửa đó
-- Ví dụ:
-  - Đặt 50 vào `bau`, ra 2 `bau` -> +100
-  - Đặt 50 vào `bau`, không ra `bau` -> -50
+## System Admin API
+- `GET /api/admin/users`
+- `PATCH /api/admin/users`
+  - body: `{ "userId": "...", "role": "user|admin" }`
 
-### Models MongoDB
-- `lib/models/BauCuaRound.ts`
-- `lib/models/BauCuaBet.ts`
-- `lib/models/BauCuaWallet.ts`
+## Tech Stack
+- Next.js (App Router)
+- React + TypeScript
+- Tailwind CSS + shadcn/ui
+- MongoDB
+- NextAuth
+- Cloudinary
 
-### Bố cục bàn
-- Hàng 1: `nai - bau - ga`
-- Hàng 2: `ca - cua - tom`
+## Quick Start
 
-## 🛠 Tech Stack
-- Frontend: Next.js (App Router), React, TypeScript
-- UI: Tailwind CSS, shadcn/ui
-- Database: MongoDB
-- Auth: NextAuth
-- Media: Cloudinary
-- AI: OpenAI-compatible API (MegaLLM)
-
-## 🚀 Quick Start
-
-### 1. Cài dependencies
+1. Install dependencies
 ```bash
 npm install
 ```
 
-### 2. Tạo env local
+2. Create env file
 ```bash
 cp .env.local.example .env.local
 ```
 
-### 3. Cấu hình `.env.local`
+3. Fill `.env.local`
 ```env
 MONGODB_URI=...
 NEXTAUTH_URL=http://localhost:3000
@@ -93,50 +92,19 @@ CLOUDINARY_API_KEY=...
 CLOUDINARY_API_SECRET=...
 MEGALLM_API_KEY=...
 MEGALLM_MODEL=...
+SYSTEM_ADMIN_EMAILS=admin1@example.com,admin2@example.com
 ```
 
-### 4. Chạy dev server
+4. Run dev server
 ```bash
 npm run dev
 ```
 
-Mở: `http://localhost:3000`
+Open: `http://localhost:3000`
 
-## 🧪 Test & Quality
+## Quality
 ```bash
 npm run lint
 npx tsc --noEmit
 npm test
 ```
-
-## 📁 Cấu trúc chính
-```text
-tet-connect/
-  app/
-    api/
-    dashboard/
-    events/
-    family/
-    games/
-    photos/
-    posts/
-  components/
-  lib/
-    models/
-    hooks/
-  docs/
-```
-
-## 📚 Tài liệu thêm
-- `docs/API_DOCUMENTATION.md`
-- `docs/DEPLOYMENT_GUIDE.md`
-- `docs/QUICK_SETUP_GUIDE.md`
-- `components/photos/README.md`
-- `components/videos/README.md`
-
-## 🔧 Ghi chú
-- Game Bầu Cua dùng điểm ảo, không có giao dịch tiền thật.
-- Nếu ảnh upload lỗi trên local, kiểm tra cấu hình `CLOUDINARY_*` trong `.env.local`.
-
----
-Made with ❤️ for Vietnamese families.

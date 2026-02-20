@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
 import User from '@/lib/models/User'
 import { hashPassword, isValidEmail, isValidPassword } from '@/lib/auth'
+import { getDefaultRoleForEmail } from '@/lib/system-admin'
 
 export async function POST(req: Request) {
   try {
@@ -63,11 +64,13 @@ export async function POST(req: Request) {
     const hashedPassword = await hashPassword(password)
 
     // Create user
+    const role = getDefaultRoleForEmail(email)
     const user = await User.create({
       email: email.toLowerCase(),
       password: hashedPassword,
       name: name.trim(),
       provider: 'credentials',
+      role,
     })
 
     return NextResponse.json({
@@ -76,6 +79,7 @@ export async function POST(req: Request) {
         id: user._id.toString(),
         email: user.email,
         name: user.name,
+        role: user.role,
       },
     })
   } catch (error) {

@@ -10,14 +10,24 @@ export default withAuth(
     callbacks: {
       authorized: ({ token, req }) => {
         // Protected routes that require authentication
-        const protectedRoutes = ['/dashboard', '/family', '/events', '/photos', '/posts', '/games']
+        const protectedRoutes = ['/dashboard', '/family', '/events', '/photos', '/posts', '/games', '/admin']
         const isProtectedRoute = protectedRoutes.some((route) =>
           req.nextUrl.pathname.startsWith(route)
         )
 
+        const isAdminRoute = req.nextUrl.pathname.startsWith('/admin')
+
         // If accessing protected route, check if user is authenticated
         if (isProtectedRoute) {
-          return !!token
+          if (!token) {
+            return false
+          }
+
+          if (isAdminRoute) {
+            return token.role === 'admin'
+          }
+
+          return true
         }
 
         // Allow access to public routes
