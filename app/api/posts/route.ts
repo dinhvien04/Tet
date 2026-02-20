@@ -4,6 +4,8 @@ import { authOptions } from '@/app/api/auth/[...nextauth]/route'
 import { connectDB } from '@/lib/mongodb'
 import Post from '@/lib/models/Post'
 import FamilyMember from '@/lib/models/FamilyMember'
+import Reaction from '@/lib/models/Reaction'
+import Comment from '@/lib/models/Comment'
 
 export async function POST(request: NextRequest) {
   try {
@@ -62,6 +64,12 @@ export async function POST(request: NextRequest) {
         content: post.content,
         type: post.type,
         created_at: post.createdAt,
+        reactions: {
+          heart: 0,
+          haha: 0,
+        },
+        userReaction: null,
+        commentsCount: 0,
         users: {
           id: user._id.toString(),
           name: user.name,
@@ -112,6 +120,37 @@ export async function GET(request: NextRequest) {
       .limit(limit)
       .lean()
 
+    const postIds = posts.map((postDoc) => postDoc._id.toString())
+
+    const [reactions, comments] = await Promise.all([
+      postIds.length > 0
+        ? Reaction.find({ postId: { $in: postIds } }).select('postId userId type').lean()
+        : Promise.resolve([]),
+      postIds.length > 0
+        ? Comment.find({ postId: { $in: postIds } }).select('postId').lean()
+        : Promise.resolve([]),
+    ])
+
+    const reactionCountMap = new Map<string, { heart: number; haha: number }>()
+    const userReactionMap = new Map<string, 'heart' | 'haha'>()
+
+    reactions.forEach((reaction) => {
+      const postId = reaction.postId.toString()
+      const counts = reactionCountMap.get(postId) || { heart: 0, haha: 0 }
+      counts[reaction.type] += 1
+      reactionCountMap.set(postId, counts)
+
+      if (reaction.userId.toString() === session.user.id) {
+        userReactionMap.set(postId, reaction.type)
+      }
+    })
+
+    const commentsCountMap = new Map<string, number>()
+    comments.forEach((comment) => {
+      const postId = comment.postId.toString()
+      commentsCountMap.set(postId, (commentsCountMap.get(postId) || 0) + 1)
+    })
+
     const formattedPosts = posts.map((postDoc) => {
       const user = postDoc.userId as unknown as {
         _id: { toString(): string }
@@ -127,6 +166,9 @@ export async function GET(request: NextRequest) {
         content: postDoc.content,
         type: postDoc.type,
         created_at: postDoc.createdAt,
+        reactions: reactionCountMap.get(postDoc._id.toString()) || { heart: 0, haha: 0 },
+        userReaction: userReactionMap.get(postDoc._id.toString()) || null,
+        commentsCount: commentsCountMap.get(postDoc._id.toString()) || 0,
         users: {
           id: user._id.toString(),
           name: user.name,
