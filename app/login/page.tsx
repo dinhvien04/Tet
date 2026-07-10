@@ -11,11 +11,14 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
 import { Suspense } from 'react'
+import { getSafeRedirectPath } from '@/lib/safe-redirect'
 
 function LoginContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const redirectUrl = searchParams.get('redirect') || '/dashboard'
+  const redirectUrl = getSafeRedirectPath(
+    searchParams.get('redirect') || searchParams.get('callbackUrl')
+  )
   const error = searchParams.get('error')
   
   const [isLoading, setIsLoading] = useState(false)

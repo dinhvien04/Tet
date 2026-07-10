@@ -1,130 +1,207 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { randomInt } from 'crypto'
 import { connectDB } from '@/lib/mongodb'
-import FamilyMember from '@/lib/models/FamilyMember'
 import BauCuaRound, { BAU_CUA_ITEMS, BauCuaItem } from '@/lib/models/BauCuaRound'
 import BauCuaBet from '@/lib/models/BauCuaBet'
 import BauCuaWallet from '@/lib/models/BauCuaWallet'
+import {
+  AuthError,
+  authErrorResponse,
+  requireFamilyMember,
+} from '@/lib/authorization'
 
 function rollDice(): BauCuaItem[] {
   return Array.from({ length: 3 }, () => {
-    const index = Math.floor(Math.random() * BAU_CUA_ITEMS.length)
+    const index = randomInt(0, BAU_CUA_ITEMS.length)
     return BAU_CUA_ITEMS[index]
   })
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
-    }
-
     const body = await request.json()
-    const familyId = body.familyId
-    if (!familyId) {
-      return NextResponse.json({ error: 'Thieu familyId' }, { status: 400 })
+    const familyIdRaw = body.familyId
+    if (!familyIdRaw) {
+      return NextResponse.json({ error: 'Thiếu familyId' }, { status: 400 })
     }
 
+    const { user, membership, familyId } = await requireFamilyMember(String(familyIdRaw))
     await connectDB()
 
-    const membership = await FamilyMember.findOne({
-      familyId,
-      userId: session.user.id,
-    }).lean()
-    if (!membership) {
-      return NextResponse.json(
-        { error: 'Ban khong phai thanh vien cua nha nay' },
-        { status: 403 }
-      )
-    }
-
+    // CAS: only one concurrent roll can transition betting → rolling
     const round = await BauCuaRound.findOneAndUpdate(
-      { familyId, status: 'betting' },
-      { status: 'rolling' },
+      { familyId, status: 'betting', settlementCompleted: false },
+      {
+        $set: {
+          status: 'rolling',
+        },
+      },
       { sort: { roundNumber: -1 }, new: true }
     )
 
     if (!round) {
+      // Maybe already rolled — return idempotent result if host retries
+      const latest = await BauCuaRound.findOne({ familyId }).sort({ roundNumber: -1 })
+      if (latest?.status === 'rolled' && latest.settlementCompleted) {
+        const wallet = await BauCuaWallet.findOne({ familyId, userId: user.id }).lean()
+        return NextResponse.json({
+          success: true,
+          idempotent: true,
+          round: {
+            id: latest._id.toString(),
+            roundNumber: latest.roundNumber,
+            status: latest.status,
+            diceResults: latest.diceResults,
+            rolledAt: latest.rolledAt,
+          },
+          myBalance: wallet?.balance ?? 1000,
+        })
+      }
+
       return NextResponse.json(
-        { error: 'Khong co van nao dang mo de quay' },
+        { error: 'Không có ván nào đang mở để quay' },
         { status: 409 }
+      )
+    }
+
+    // Host or family admin only
+    const isHost = round.hostUserId?.toString() === user.id
+    const isAdmin = membership.role === 'admin'
+    if (!isHost && !isAdmin) {
+      // Revert status so a legitimate host can still roll
+      await BauCuaRound.updateOne(
+        { _id: round._id, status: 'rolling', settlementCompleted: false },
+        { $set: { status: 'betting' } }
+      )
+      return NextResponse.json(
+        { error: 'Chỉ host hoặc admin mới được quay' },
+        { status: 403 }
       )
     }
 
     const diceResults = rollDice()
     const bets = await BauCuaBet.find({ roundId: round._id }).lean()
-    const payouts = new Map<string, number>()
 
-    bets.forEach((bet) => {
+    // Net payout per user: win = +amount * matchCount, lose = -amount
+    // Reserved was held; settlement applies net to balance and clears reserved.
+    const netByUser = new Map<string, number>()
+    const reservedByUser = new Map<string, number>()
+
+    for (const bet of bets) {
       const userId = bet.userId.toString()
       const matchedCount = diceResults.filter((result) => result === bet.item).length
       const net = matchedCount === 0 ? -bet.amount : bet.amount * matchedCount
-      payouts.set(userId, (payouts.get(userId) || 0) + net)
-    })
+      netByUser.set(userId, (netByUser.get(userId) || 0) + net)
+      reservedByUser.set(userId, (reservedByUser.get(userId) || 0) + bet.amount)
+    }
 
     const now = new Date()
-    const payoutUserIds = Array.from(payouts.keys())
-    if (payoutUserIds.length > 0) {
-      const existingWallets = await BauCuaWallet.find({
-        familyId,
-        userId: { $in: payoutUserIds },
-      })
-        .select('userId')
-        .lean()
+    const userIds = Array.from(
+      new Set([...netByUser.keys(), ...reservedByUser.keys()])
+    )
 
-      const existingSet = new Set(existingWallets.map((wallet) => wallet.userId.toString()))
-      const missingUserIds = payoutUserIds.filter((userId) => !existingSet.has(userId))
-
-      if (missingUserIds.length > 0) {
-        await BauCuaWallet.insertMany(
-          missingUserIds.map((userId) => ({
-            familyId,
-            userId,
-            balance: 1000,
-            updatedAt: now,
-          }))
+    if (userIds.length > 0) {
+      // Ensure wallets exist before settlement
+      for (const userId of userIds) {
+        await BauCuaWallet.findOneAndUpdate(
+          { familyId, userId },
+          {
+            $setOnInsert: {
+              balance: 1000,
+              reservedBalance: 0,
+              updatedAt: now,
+            },
+          },
+          { upsert: true }
         )
       }
 
       await BauCuaWallet.bulkWrite(
-        payoutUserIds.map((userId) => ({
-          updateOne: {
-            filter: { familyId, userId },
-            update: {
-              $inc: { balance: payouts.get(userId) || 0 },
-              $set: { updatedAt: now },
+        userIds.map((userId) => {
+          const net = netByUser.get(userId) || 0
+          const reserved = reservedByUser.get(userId) || 0
+          return {
+            updateOne: {
+              filter: { familyId, userId },
+              update: {
+                $inc: {
+                  balance: net,
+                  reservedBalance: -reserved,
+                },
+                $set: { updatedAt: now },
+              },
             },
-          },
-        }))
+          }
+        })
       )
     }
 
-    round.status = 'rolled'
-    round.diceResults = diceResults
-    round.rolledAt = now
-    await round.save()
+    // Mark settlement complete only once (idempotent)
+    const settled = await BauCuaRound.findOneAndUpdate(
+      {
+        _id: round._id,
+        status: 'rolling',
+        settlementCompleted: false,
+      },
+      {
+        $set: {
+          status: 'rolled',
+          diceResults,
+          rolledAt: now,
+          settlementCompleted: true,
+        },
+      },
+      { new: true }
+    )
 
-    const updatedWallet =
-      (await BauCuaWallet.findOne({ familyId, userId: session.user.id }).lean()) ||
-      ({ balance: 1000 } as { balance: number })
+    if (!settled) {
+      // Another process finished settlement; do not apply twice
+      const latest = await BauCuaRound.findById(round._id)
+      const wallet = await BauCuaWallet.findOne({ familyId, userId: user.id }).lean()
+      return NextResponse.json({
+        success: true,
+        idempotent: true,
+        round: {
+          id: latest?._id.toString(),
+          roundNumber: latest?.roundNumber,
+          status: latest?.status,
+          diceResults: latest?.diceResults,
+          rolledAt: latest?.rolledAt,
+        },
+        myBalance: wallet?.balance ?? 1000,
+      })
+    }
+
+    // Clamp reservedBalance >= 0 (in case of drift)
+    await BauCuaWallet.updateMany(
+      { familyId, reservedBalance: { $lt: 0 } },
+      { $set: { reservedBalance: 0 } }
+    )
+
+    const updatedWallet = await BauCuaWallet.findOne({
+      familyId,
+      userId: user.id,
+    }).lean()
 
     return NextResponse.json({
       success: true,
       round: {
-        id: round._id.toString(),
-        round_number: round.roundNumber,
-        status: round.status,
-        dice_results: round.diceResults,
-        rolled_at: round.rolledAt,
+        id: settled._id.toString(),
+        roundNumber: settled.roundNumber,
+        status: settled.status,
+        diceResults: settled.diceResults,
+        rolledAt: settled.rolledAt,
       },
-      my_net: payouts.get(session.user.id) || 0,
-      my_balance: updatedWallet.balance,
-      payout_count: payoutUserIds.length,
+      myNet: netByUser.get(user.id) || 0,
+      myBalance: updatedWallet?.balance ?? 1000,
+      payoutCount: userIds.length,
     })
   } catch (error) {
+    if (error instanceof AuthError) {
+      const { error: message, status } = authErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
     console.error('Error rolling Bau Cua round:', error)
-    return NextResponse.json({ error: 'Khong the quay xuc xac' }, { status: 500 })
+    return NextResponse.json({ error: 'Không thể quay xúc xắc' }, { status: 500 })
   }
 }

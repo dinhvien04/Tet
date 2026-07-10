@@ -7,6 +7,8 @@ export interface INotification {
   title: string
   content: string
   link?: string
+  /** Idempotency key to prevent duplicate reminders */
+  dedupeKey?: string
   read: boolean
   createdAt: Date
 }
@@ -34,6 +36,10 @@ const NotificationSchema = new Schema<INotification>(
     link: {
       type: String,
     },
+    dedupeKey: {
+      type: String,
+      sparse: true,
+    },
     read: {
       type: Boolean,
       default: false,
@@ -48,10 +54,11 @@ const NotificationSchema = new Schema<INotification>(
   }
 )
 
-// Indexes
 NotificationSchema.index({ userId: 1, read: 1, createdAt: -1 })
+NotificationSchema.index({ dedupeKey: 1 }, { unique: true, sparse: true })
 
-const Notification: Model<INotification> = 
-  mongoose.models.Notification || mongoose.model<INotification>('Notification', NotificationSchema)
+const Notification: Model<INotification> =
+  mongoose.models.Notification ||
+  mongoose.model<INotification>('Notification', NotificationSchema)
 
 export default Notification

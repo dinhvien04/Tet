@@ -5,6 +5,8 @@ export interface IBauCuaWallet {
   familyId: mongoose.Types.ObjectId
   userId: mongoose.Types.ObjectId
   balance: number
+  /** Points locked in active bets */
+  reservedBalance: number
   updatedAt: Date
 }
 
@@ -27,6 +29,11 @@ const BauCuaWalletSchema = new Schema<IBauCuaWallet>(
       default: 1000,
       min: 0,
     },
+    reservedBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     updatedAt: {
       type: Date,
       default: Date.now,
@@ -37,10 +44,15 @@ const BauCuaWalletSchema = new Schema<IBauCuaWallet>(
   }
 )
 
+BauCuaWalletSchema.virtual('availableBalance').get(function (this: IBauCuaWallet) {
+  return Math.max(0, this.balance - this.reservedBalance)
+})
+
 BauCuaWalletSchema.index({ familyId: 1, userId: 1 }, { unique: true })
 BauCuaWalletSchema.index({ familyId: 1, balance: -1 })
 
 const BauCuaWallet: Model<IBauCuaWallet> =
-  mongoose.models.BauCuaWallet || mongoose.model<IBauCuaWallet>('BauCuaWallet', BauCuaWalletSchema)
+  mongoose.models.BauCuaWallet ||
+  mongoose.model<IBauCuaWallet>('BauCuaWallet', BauCuaWalletSchema)
 
 export default BauCuaWallet

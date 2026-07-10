@@ -11,6 +11,7 @@ export { default as Comment } from './Comment'
 export { default as BauCuaRound } from './BauCuaRound'
 export { default as BauCuaBet } from './BauCuaBet'
 export { default as BauCuaWallet } from './BauCuaWallet'
+export { default as RateLimit } from './RateLimit'
 
 export type { IUser } from './User'
 export type { IFamily } from './Family'

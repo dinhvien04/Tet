@@ -1,12 +1,23 @@
 import NextAuth, { NextAuthOptions } from 'next-auth'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import GoogleProvider from 'next-auth/providers/google'
-import { MongoDBAdapter } from '@auth/mongodb-adapter'
-import clientPromise from '@/lib/mongodb'
 import { connectDB } from '@/lib/mongodb'
 import User from '@/lib/models/User'
 import { verifyPassword } from '@/lib/auth'
 import { getDefaultRoleForEmail } from '@/lib/system-admin'
+
+function requireAuthSecret(): string {
+  const secret = process.env.NEXTAUTH_SECRET
+  if (!secret || secret.trim() === '' || secret.includes('change-in-production')) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('NEXTAUTH_SECRET is required in production')
+    }
+    // Dev-only placeholder so local can boot; never used as production fallback
+    console.warn('[auth] NEXTAUTH_SECRET missing or insecure; set a strong secret before production')
+    return secret || 'dev-only-insecure-secret'
+  }
+  return secret
+}
 
 async function resolveAndSyncRole(email?: string | null) {
   if (!email) {
@@ -39,7 +50,7 @@ async function resolveAndSyncRole(email?: string | null) {
 }
 
 export const authOptions: NextAuthOptions = {
-  adapter: MongoDBAdapter(clientPromise) as any,
+  // JWT strategy: Mongoose User is the single source of truth (no MongoDBAdapter)
   providers: [
     CredentialsProvider({
       name: 'Credentials',
@@ -49,23 +60,23 @@ export const authOptions: NextAuthOptions = {
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
-          throw new Error('Email va mat khau la bat buoc')
+          throw new Error('Email và mật khẩu là bắt buộc')
         }
 
         await connectDB()
 
         const user = await User.findOne({ email: credentials.email.toLowerCase() })
         if (!user) {
-          throw new Error('Email hoac mat khau khong dung')
+          throw new Error('Email hoặc mật khẩu không đúng')
         }
 
         if (user.provider !== 'credentials' || !user.password) {
-          throw new Error('Tai khoan nay dang ky bang Google. Vui long dang nhap bang Google.')
+          throw new Error('Tài khoản này đăng ký bằng Google. Vui lòng đăng nhập bằng Google.')
         }
 
         const isValid = await verifyPassword(credentials.password, user.password)
         if (!isValid) {
-          throw new Error('Email hoac mat khau khong dung')
+          throw new Error('Email hoặc mật khẩu không đúng')
         }
 
         const resolvedRole = user.role || getDefaultRoleForEmail(user.email)
@@ -110,8 +121,13 @@ export const authOptions: NextAuthOptions = {
     error: '/login',
   },
   callbacks: {
-    async signIn({ user, profile }) {
-      if (profile && user.email) {
+    async signIn({ user, account, profile }) {
+      // Credentials already validated in authorize
+      if (account?.provider === 'credentials') {
+        return true
+      }
+
+      if (account?.provider === 'google' && user.email) {
         await connectDB()
 
         const normalizedEmail = user.email.toLowerCase()
@@ -121,20 +137,39 @@ export const authOptions: NextAuthOptions = {
           const role = getDefaultRoleForEmail(normalizedEmail)
           await User.create({
             email: normalizedEmail,
-            name: user.name || profile.name,
-            avatar: user.image || (profile as any).picture,
+            name: user.name || (profile as { name?: string })?.name || normalizedEmail.split('@')[0],
+            avatar: user.image || (profile as { picture?: string })?.picture,
             provider: 'google',
             role,
           })
-        } else if (existingUser.provider === 'credentials') {
-          return false
-        } else {
-          const resolvedRole = existingUser.role || getDefaultRoleForEmail(existingUser.email)
-          if (existingUser.role !== resolvedRole) {
-            existingUser.role = resolvedRole
-            await existingUser.save()
-          }
+          return true
         }
+
+        // Prevent account takeover: credentials account cannot sign in via Google
+        if (existingUser.provider === 'credentials') {
+          return false
+        }
+
+        // Update profile fields for returning Google users
+        const resolvedRole = existingUser.role || getDefaultRoleForEmail(existingUser.email)
+        let dirty = false
+        if (existingUser.role !== resolvedRole) {
+          existingUser.role = resolvedRole
+          dirty = true
+        }
+        if (user.name && existingUser.name !== user.name) {
+          existingUser.name = user.name
+          dirty = true
+        }
+        if (user.image && existingUser.avatar !== user.image) {
+          existingUser.avatar = user.image
+          dirty = true
+        }
+        if (dirty) {
+          await existingUser.save()
+        }
+
+        return true
       }
 
       return true
@@ -152,6 +187,7 @@ export const authOptions: NextAuthOptions = {
           token.id = resolvedUser.id
         }
 
+        // Role always from DB — never trust client
         token.role = resolvedUser.role
       } else if (!token.role) {
         token.role = 'user'
@@ -168,7 +204,7 @@ export const authOptions: NextAuthOptions = {
       return session
     },
   },
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: requireAuthSecret(),
 }
 
 const handler = NextAuth(authOptions)

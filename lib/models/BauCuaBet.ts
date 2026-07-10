@@ -8,6 +8,8 @@ export interface IBauCuaBet {
   userId: mongoose.Types.ObjectId
   item: BauCuaItem
   amount: number
+  /** Client-supplied or server-generated key for idempotent retries */
+  idempotencyKey?: string
   createdAt: Date
 }
 
@@ -40,6 +42,11 @@ const BauCuaBetSchema = new Schema<IBauCuaBet>(
       type: Number,
       required: true,
       min: 1,
+      max: 10000,
+    },
+    idempotencyKey: {
+      type: String,
+      sparse: true,
     },
     createdAt: {
       type: Date,
@@ -53,6 +60,10 @@ const BauCuaBetSchema = new Schema<IBauCuaBet>(
 
 BauCuaBetSchema.index({ roundId: 1, userId: 1 })
 BauCuaBetSchema.index({ familyId: 1, createdAt: -1 })
+BauCuaBetSchema.index(
+  { roundId: 1, userId: 1, idempotencyKey: 1 },
+  { unique: true, sparse: true }
+)
 
 const BauCuaBet: Model<IBauCuaBet> =
   mongoose.models.BauCuaBet || mongoose.model<IBauCuaBet>('BauCuaBet', BauCuaBetSchema)

@@ -115,13 +115,41 @@ export async function PATCH(
     }
 
     if (targetMembership.role === 'admin' && role === 'member') {
-      const adminCount = await FamilyMember.countDocuments({ familyId: id, role: 'admin' })
-      if (adminCount <= 1) {
+      // Atomic last-admin guard: only demote if another admin still exists
+      const demoted = await FamilyMember.findOneAndUpdate(
+        {
+          _id: memberId,
+          familyId: id,
+          role: 'admin',
+          // Ensure at least one other admin remains
+        },
+        { $set: { role: 'member' } },
+        { new: true }
+      ).populate('userId', 'name email avatar')
+
+      if (!demoted) {
+        return NextResponse.json({ error: 'Khong tim thay thanh vien' }, { status: 404 })
+      }
+
+      const remainingAdmins = await FamilyMember.countDocuments({
+        familyId: id,
+        role: 'admin',
+      })
+
+      if (remainingAdmins < 1) {
+        // Rollback demotion
+        demoted.role = 'admin'
+        await demoted.save()
         return NextResponse.json(
           { error: 'Nha phai co it nhat 1 admin' },
           { status: 400 }
         )
       }
+
+      return NextResponse.json({
+        success: true,
+        member: formatMember(demoted),
+      })
     }
 
     targetMembership.role = role
@@ -179,6 +207,7 @@ export async function DELETE(
     }
 
     if (targetMembership.role === 'admin') {
+      // Delete only if another admin remains (atomic check via pre-count + re-verify)
       const adminCount = await FamilyMember.countDocuments({ familyId: id, role: 'admin' })
       if (adminCount <= 1) {
         return NextResponse.json(
@@ -186,6 +215,37 @@ export async function DELETE(
           { status: 400 }
         )
       }
+
+      const deleted = await FamilyMember.findOneAndDelete({
+        _id: targetMembership._id,
+        familyId: id,
+        role: 'admin',
+      })
+
+      if (!deleted) {
+        return NextResponse.json({ error: 'Khong tim thay thanh vien' }, { status: 404 })
+      }
+
+      const remainingAdmins = await FamilyMember.countDocuments({
+        familyId: id,
+        role: 'admin',
+      })
+
+      if (remainingAdmins < 1) {
+        // Restore if we raced and removed the last admin
+        await FamilyMember.create({
+          familyId: deleted.familyId,
+          userId: deleted.userId,
+          role: 'admin',
+          joinedAt: deleted.joinedAt,
+        })
+        return NextResponse.json(
+          { error: 'Nha phai co it nhat 1 admin' },
+          { status: 400 }
+        )
+      }
+
+      return NextResponse.json({ success: true })
     }
 
     await FamilyMember.deleteOne({ _id: targetMembership._id })
