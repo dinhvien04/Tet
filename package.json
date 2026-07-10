@@ -9,7 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:ci": "vitest run tests/safe-redirect.test.ts tests/cron-auth.test.ts tests/ai-generate-security.test.ts tests/pagination.test.ts tests/dashboard-summary-api.test.ts",
+    "test:ci": "vitest run tests/safe-redirect.test.ts tests/cron-auth.test.ts tests/ai-generate-security.test.ts tests/pagination.test.ts tests/dashboard-summary-api.test.ts tests/posts-delete-api.test.ts",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
