@@ -23,8 +23,8 @@ export async function checkAndCreateNotifications() {
 
   const now = new Date()
   const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
-  // Day bucket for dedupe (UTC date string is fine as stable key prefix)
-  const dayKey = now.toISOString().slice(0, 10)
+  // Dedupe uses semantic keys (event/task + user + window), not UTC calendar day,
+  // so cron across midnight cannot double-notify the same 24h window.
 
   const upcomingEvents = await Event.find({
     date: {

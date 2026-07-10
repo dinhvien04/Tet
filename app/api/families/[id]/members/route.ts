@@ -1,16 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
 import { connectDB } from '@/lib/mongodb'
 import FamilyMember from '@/lib/models/FamilyMember'
+import {
+  AuthError,
+  authErrorResponse,
+  parseObjectId,
+  requireFamilyAdmin,
+  requireFamilyMember,
+  requireUser,
+} from '@/lib/authorization'
+import {
+  TransactionNotSupportedError,
+  withMongoTransaction,
+} from '@/lib/mongo-transaction'
+import { requireEnum, requireObjectIdString, ValidationError } from '@/lib/api/validate'
 
-async function getAuthenticatedUserId() {
-  const session = await getServerSession(authOptions)
-  return session?.user?.id || null
-}
-
-function formatMember(member: any) {
-  const user = member.userId as unknown as {
+function formatMember(member: {
+  _id: { toString(): string }
+  userId: unknown
+  role: string
+  joinedAt: Date
+}) {
+  const user = member.userId as {
     _id: { toString(): string }
     name: string
     email: string
@@ -19,13 +30,14 @@ function formatMember(member: any) {
 
   return {
     id: member._id.toString(),
+    userId: user._id.toString(),
     user_id: user._id.toString(),
     name: user.name,
     email: user.email,
     avatar: user.avatar,
     role: member.role,
+    joinedAt: member.joinedAt,
     joined_at: member.joinedAt,
-    // Backward-compatible nested shape for older UI code.
     users: {
       id: user._id.toString(),
       name: user.name,
@@ -35,11 +47,12 @@ function formatMember(member: any) {
   }
 }
 
-async function getRequesterMembership(familyId: string, userId: string) {
-  return FamilyMember.findOne({
-    familyId,
-    userId,
-  })
+class LastAdminError extends Error {
+  status = 400
+  constructor(message = 'Nhà phải có ít nhất 1 admin') {
+    super(message)
+    this.name = 'LastAdminError'
+  }
 }
 
 export async function GET(
@@ -48,29 +61,21 @@ export async function GET(
 ) {
   try {
     const { id } = await params
-
-    const userId = await getAuthenticatedUserId()
-    if (!userId) {
-      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
-    }
-
-    await connectDB()
-
-    const userMembership = await getRequesterMembership(id, userId)
-    if (!userMembership) {
-      return NextResponse.json({ error: 'Ban khong phai thanh vien cua nha nay' }, { status: 403 })
-    }
+    parseObjectId(id, 'familyId')
+    await requireFamilyMember(id)
 
     const members = await FamilyMember.find({ familyId: id })
       .populate('userId', 'name email avatar')
       .lean()
 
-    const formattedMembers = members.map(formatMember)
-
-    return NextResponse.json({ members: formattedMembers })
+    return NextResponse.json({ members: members.map(formatMember) })
   } catch (error) {
+    if (error instanceof AuthError) {
+      const { error: message, status } = authErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
     console.error('Error fetching members:', error)
-    return NextResponse.json({ error: 'Khong the lay danh sach thanh vien' }, { status: 500 })
+    return NextResponse.json({ error: 'Không thể lấy danh sách thành viên' }, { status: 500 })
   }
 }
 
@@ -79,89 +84,86 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params
-    const userId = await getAuthenticatedUserId()
+    const { id: familyId } = await params
+    parseObjectId(familyId, 'familyId')
+    await requireFamilyAdmin(familyId)
 
-    if (!userId) {
-      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
-    }
-
-    const { memberId, role } = await request.json()
-    if (!memberId || !['admin', 'member'].includes(role)) {
-      return NextResponse.json(
-        { error: 'Thieu memberId hoac role khong hop le' },
-        { status: 400 }
-      )
-    }
+    const body = await request.json()
+    const memberId = requireObjectIdString(body.memberId, 'memberId')
+    const role = requireEnum(body.role, 'role', ['admin', 'member'] as const)
 
     await connectDB()
 
-    const requesterMembership = await getRequesterMembership(id, userId)
-    if (!requesterMembership) {
-      return NextResponse.json({ error: 'Ban khong phai thanh vien cua nha nay' }, { status: 403 })
-    }
+    try {
+      const updated = await withMongoTransaction(async (session) => {
+        const q = <T>(query: T): T => {
+          if (
+            session &&
+            query &&
+            typeof (query as unknown as { session?: unknown }).session === 'function'
+          ) {
+            return (query as unknown as { session: (s: typeof session) => T }).session(
+              session
+            )
+          }
+          return query
+        }
 
-    if (requesterMembership.role !== 'admin') {
-      return NextResponse.json({ error: 'Chi admin moi duoc quan ly thanh vien' }, { status: 403 })
-    }
+        const target = await q(
+          FamilyMember.findOne({ _id: memberId, familyId }).populate(
+            'userId',
+            'name email avatar'
+          )
+        )
+        if (!target) {
+          throw new AuthError('Không tìm thấy thành viên', 404)
+        }
 
-    const targetMembership = await FamilyMember.findOne({
-      _id: memberId,
-      familyId: id,
-    }).populate('userId', 'name email avatar')
+        // Demoting an admin: require another admin inside the same transaction
+        if (target.role === 'admin' && role === 'member') {
+          const adminCount = await FamilyMember.countDocuments(
+            { familyId, role: 'admin' },
+            session ? { session } : undefined
+          )
+          if (adminCount <= 1) {
+            throw new LastAdminError()
+          }
+        }
 
-    if (!targetMembership) {
-      return NextResponse.json({ error: 'Khong tim thay thanh vien' }, { status: 404 })
-    }
-
-    if (targetMembership.role === 'admin' && role === 'member') {
-      // Atomic last-admin guard: only demote if another admin still exists
-      const demoted = await FamilyMember.findOneAndUpdate(
-        {
-          _id: memberId,
-          familyId: id,
-          role: 'admin',
-          // Ensure at least one other admin remains
-        },
-        { $set: { role: 'member' } },
-        { new: true }
-      ).populate('userId', 'name email avatar')
-
-      if (!demoted) {
-        return NextResponse.json({ error: 'Khong tim thay thanh vien' }, { status: 404 })
-      }
-
-      const remainingAdmins = await FamilyMember.countDocuments({
-        familyId: id,
-        role: 'admin',
+        target.role = role
+        await target.save(session ? { session } : undefined)
+        return target
       })
 
-      if (remainingAdmins < 1) {
-        // Rollback demotion
-        demoted.role = 'admin'
-        await demoted.save()
-        return NextResponse.json(
-          { error: 'Nha phai co it nhat 1 admin' },
-          { status: 400 }
-        )
-      }
+      // Ensure populated shape for response
+      await updated.populate('userId', 'name email avatar')
 
       return NextResponse.json({
         success: true,
-        member: formatMember(demoted),
+        member: formatMember(updated),
       })
+    } catch (error) {
+      if (error instanceof LastAdminError) {
+        return NextResponse.json({ error: error.message }, { status: 400 })
+      }
+      if (error instanceof TransactionNotSupportedError) {
+        return NextResponse.json(
+          { error: 'Cần MongoDB replica set để đổi quyền an toàn' },
+          { status: 503 }
+        )
+      }
+      throw error
     }
-
-    targetMembership.role = role
-    await targetMembership.save()
-
-    return NextResponse.json({
-      success: true,
-      member: formatMember(targetMembership),
-    })
   } catch (error) {
+    if (error instanceof AuthError) {
+      const { error: message, status } = authErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
+    if (error instanceof ValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 })
+    }
     console.error('Error updating member role:', error)
-    return NextResponse.json({ error: 'Khong the cap nhat quyen thanh vien' }, { status: 500 })
+    return NextResponse.json({ error: 'Không thể cập nhật quyền thành viên' }, { status: 500 })
   }
 }
 
@@ -170,89 +172,72 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params
-    const userId = await getAuthenticatedUserId()
+    const { id: familyId } = await params
+    parseObjectId(familyId, 'familyId')
+    const user = await requireUser()
+    await requireFamilyAdmin(familyId)
 
-    if (!userId) {
-      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
+    const memberIdRaw = request.nextUrl.searchParams.get('memberId')
+    if (!memberIdRaw) {
+      return NextResponse.json({ error: 'Thiếu memberId' }, { status: 400 })
     }
-
-    const memberId = request.nextUrl.searchParams.get('memberId')
-    if (!memberId) {
-      return NextResponse.json({ error: 'Thieu memberId' }, { status: 400 })
-    }
+    const memberId = requireObjectIdString(memberIdRaw, 'memberId')
 
     await connectDB()
 
-    const requesterMembership = await getRequesterMembership(id, userId)
-    if (!requesterMembership) {
-      return NextResponse.json({ error: 'Ban khong phai thanh vien cua nha nay' }, { status: 403 })
-    }
-
-    if (requesterMembership.role !== 'admin') {
-      return NextResponse.json({ error: 'Chi admin moi duoc xoa thanh vien' }, { status: 403 })
-    }
-
-    const targetMembership = await FamilyMember.findOne({
-      _id: memberId,
-      familyId: id,
-    })
-
-    if (!targetMembership) {
-      return NextResponse.json({ error: 'Khong tim thay thanh vien' }, { status: 404 })
-    }
-
-    if (targetMembership.userId.toString() === userId) {
-      return NextResponse.json({ error: 'Khong the tu xoa chinh minh' }, { status: 400 })
-    }
-
-    if (targetMembership.role === 'admin') {
-      // Delete only if another admin remains (atomic check via pre-count + re-verify)
-      const adminCount = await FamilyMember.countDocuments({ familyId: id, role: 'admin' })
-      if (adminCount <= 1) {
-        return NextResponse.json(
-          { error: 'Nha phai co it nhat 1 admin' },
-          { status: 400 }
+    try {
+      await withMongoTransaction(async (session) => {
+        const target = await FamilyMember.findOne(
+          { _id: memberId, familyId },
+          null,
+          session ? { session } : undefined
         )
-      }
+        if (!target) {
+          throw new AuthError('Không tìm thấy thành viên', 404)
+        }
 
-      const deleted = await FamilyMember.findOneAndDelete({
-        _id: targetMembership._id,
-        familyId: id,
-        role: 'admin',
-      })
+        if (target.userId.toString() === user.id) {
+          throw new AuthError('Không thể tự xóa chính mình', 400)
+        }
 
-      if (!deleted) {
-        return NextResponse.json({ error: 'Khong tim thay thanh vien' }, { status: 404 })
-      }
+        if (target.role === 'admin') {
+          const adminCount = await FamilyMember.countDocuments(
+            { familyId, role: 'admin' },
+            session ? { session } : undefined
+          )
+          if (adminCount <= 1) {
+            throw new LastAdminError()
+          }
+        }
 
-      const remainingAdmins = await FamilyMember.countDocuments({
-        familyId: id,
-        role: 'admin',
-      })
-
-      if (remainingAdmins < 1) {
-        // Restore if we raced and removed the last admin
-        await FamilyMember.create({
-          familyId: deleted.familyId,
-          userId: deleted.userId,
-          role: 'admin',
-          joinedAt: deleted.joinedAt,
-        })
-        return NextResponse.json(
-          { error: 'Nha phai co it nhat 1 admin' },
-          { status: 400 }
+        await FamilyMember.deleteOne(
+          { _id: target._id },
+          session ? { session } : undefined
         )
-      }
+      })
 
       return NextResponse.json({ success: true })
+    } catch (error) {
+      if (error instanceof LastAdminError) {
+        return NextResponse.json({ error: error.message }, { status: 400 })
+      }
+      if (error instanceof TransactionNotSupportedError) {
+        return NextResponse.json(
+          { error: 'Cần MongoDB replica set để xóa thành viên an toàn' },
+          { status: 503 }
+        )
+      }
+      throw error
     }
-
-    await FamilyMember.deleteOne({ _id: targetMembership._id })
-
-    return NextResponse.json({ success: true })
   } catch (error) {
+    if (error instanceof AuthError) {
+      const { error: message, status } = authErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
+    if (error instanceof ValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 })
+    }
     console.error('Error deleting family member:', error)
-    return NextResponse.json({ error: 'Khong the xoa thanh vien' }, { status: 500 })
+    return NextResponse.json({ error: 'Không thể xóa thành viên' }, { status: 500 })
   }
 }

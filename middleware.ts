@@ -5,10 +5,9 @@ import { applySecurityHeaders } from '@/lib/security-headers'
 export default withAuth(
   function middleware() {
     const res = NextResponse.next()
+    // CSP enforced by default; set CSP_REPORT_ONLY=true to measure only
     return applySecurityHeaders(res, {
       production: process.env.NODE_ENV === 'production',
-      // Start report-only until violations reviewed
-      reportOnlyCsp: process.env.CSP_ENFORCE !== 'true',
     })
   },
   {

@@ -6,8 +6,9 @@ import {
   authErrorResponse,
   requireUser,
 } from '@/lib/authorization'
-import { requireString, optionalString, ValidationError } from '@/lib/api/validate'
+import { requireString, ValidationError } from '@/lib/api/validate'
 import { hashPassword, isValidPassword, verifyPassword } from '@/lib/auth'
+import { validateAvatarUrl } from '@/lib/avatar'
 import FamilyMember from '@/lib/models/FamilyMember'
 import Post from '@/lib/models/Post'
 import Reaction from '@/lib/models/Reaction'
@@ -69,15 +70,11 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (body.avatar !== undefined) {
-      const avatar = optionalString(body.avatar, 'avatar', { max: 2000 })
-      // Only allow http(s) or empty
-      if (avatar && !/^https?:\/\//i.test(avatar)) {
-        return NextResponse.json(
-          { error: 'Avatar phải là URL http(s)' },
-          { status: 400 }
-        )
+      const avatarResult = validateAvatarUrl(body.avatar)
+      if (!avatarResult.ok) {
+        return NextResponse.json({ error: avatarResult.error }, { status: 400 })
       }
-      user.avatar = avatar
+      user.avatar = avatarResult.url ?? undefined
     }
 
     // Password change for credentials users only

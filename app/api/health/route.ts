@@ -1,14 +1,9 @@
 import { NextResponse } from 'next/server'
-import { connectDB } from '@/lib/mongodb'
 
 /**
- * Public liveness/readiness — minimal payload, no secrets or stack traces.
+ * Liveness — process is up. No DB, no secrets, minimal payload.
+ * GET /api/health
  */
 export async function GET() {
-  try {
-    await connectDB()
-    return NextResponse.json({ status: 'ok' }, { status: 200 })
-  } catch {
-    return NextResponse.json({ status: 'error' }, { status: 503 })
-  }
+  return NextResponse.json({ status: 'ok' }, { status: 200 })
 }
