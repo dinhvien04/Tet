@@ -1,6 +1,6 @@
 'use client'
 
-import { Home, Calendar, Image, Users, LogOut, Dice5, ShieldCheck } from 'lucide-react'
+import { Home, Calendar, Image, Users, LogOut, Dice5, ShieldCheck, UserCircle } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/hooks/useAuth'
@@ -17,21 +17,22 @@ export function Sidebar({ className }: SidebarProps) {
   const { user, signOut } = useAuth()
 
   const navItems = [
-    { href: '/dashboard', label: 'Trang chu', icon: Home },
-    { href: '/events', label: 'Su kien', icon: Calendar },
+    { href: '/dashboard', label: 'Trang chủ', icon: Home },
+    { href: '/events', label: 'Sự kiện', icon: Calendar },
     { href: '/photos', label: 'Album', icon: Image },
-    { href: '/games/bau-cua', label: 'Bau cua', icon: Dice5 },
-    { href: '/family', label: 'Gia dinh', icon: Users },
+    { href: '/games/bau-cua', label: 'Bầu Cua', icon: Dice5 },
+    { href: '/family', label: 'Gia đình', icon: Users },
+    { href: '/profile', label: 'Hồ sơ', icon: UserCircle },
   ]
 
   if (user?.role === 'admin') {
-    navItems.push({ href: '/admin', label: 'Quan tri web', icon: ShieldCheck })
+    navItems.push({ href: '/admin', label: 'Quản trị web', icon: ShieldCheck })
   }
 
   return (
-    <aside className={cn('flex flex-col h-full bg-white border-r', className)}>
-      <div className="p-6 border-b">
-        <h1 className="text-2xl font-bold text-red-600">Tet Connect</h1>
+    <aside className={cn('flex h-full flex-col border-r border-border bg-card', className)}>
+      <div className="border-b border-border p-6">
+        <h1 className="text-2xl font-bold text-primary">Tết Connect</h1>
       </div>
 
       <div className="p-4 border-b">
@@ -49,7 +50,9 @@ export function Sidebar({ className }: SidebarProps) {
               href={item.href}
               className={cn(
                 'flex items-center gap-3 px-4 py-3 rounded-lg transition-colors',
-                isActive ? 'bg-red-50 text-red-600 font-medium' : 'text-gray-700 hover:bg-gray-100'
+                isActive
+                  ? 'bg-primary/10 font-medium text-primary'
+                  : 'text-foreground hover:bg-muted'
               )}
             >
               <Icon className="h-5 w-5" />
@@ -62,7 +65,7 @@ export function Sidebar({ className }: SidebarProps) {
       <div className="p-4 border-t">
         <Button variant="ghost" className="w-full justify-start gap-3" onClick={signOut}>
           <LogOut className="h-5 w-5" />
-          <span>Dang xuat</span>
+          <span>Đăng xuất</span>
         </Button>
       </div>
     </aside>

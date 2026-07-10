@@ -81,7 +81,7 @@ export default function EventPage() {
     <div className="container mx-auto px-4 py-8 max-w-4xl">
       <EventDetail
         event={event}
-        familyId={event.family_id}
+        familyId={event.familyId || event.family_id}
         currentUserId={session?.user?.id || ''}
       />
     </div>

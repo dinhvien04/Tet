@@ -14,6 +14,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { EventRsvp } from './EventRsvp'
 
 interface EventDetailProps {
   event: Event & {
@@ -75,6 +76,8 @@ export function EventDetail({ event, familyId, currentUserId }: EventDetailProps
           )}
         </CardContent>
       </Card>
+
+      <EventRsvp eventId={event.id} />
 
       <Card>
         <CardHeader>
