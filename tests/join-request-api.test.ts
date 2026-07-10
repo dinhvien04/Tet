@@ -82,7 +82,7 @@ describe('POST /api/families/[id]/join', () => {
 
     const req = new NextRequest('http://localhost/api/families/ABC12345/join', {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({ inviteCode: 'ABC12345' }),
     })
     const res = await POST(req, { params: Promise.resolve({ id: 'ABC12345' }) })
     expect(res.status).toBe(201)
@@ -104,7 +104,7 @@ describe('POST /api/families/[id]/join', () => {
 
     const req = new NextRequest('http://localhost/api/families/ABC12345/join', {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({ inviteCode: 'ABC12345' }),
     })
     const res = await POST(req, { params: Promise.resolve({ id: 'ABC12345' }) })
     expect(res.status).toBe(200)
@@ -118,7 +118,7 @@ describe('POST /api/families/[id]/join', () => {
 
     const req = new NextRequest('http://localhost/api/families/ABC12345/join', {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({ inviteCode: 'ABC12345' }),
     })
     const res = await POST(req, { params: Promise.resolve({ id: 'ABC12345' }) })
     expect(res.status).toBe(429)

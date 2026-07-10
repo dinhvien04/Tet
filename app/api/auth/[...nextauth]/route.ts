@@ -21,18 +21,39 @@ function requireAuthSecret(): string {
 
 async function resolveAndSyncRole(email?: string | null) {
   if (!email) {
-    return { id: '', role: 'user' as const }
+    return {
+      id: '',
+      role: 'user' as const,
+      sessionVersion: 0,
+      status: 'active' as const,
+      valid: false,
+    }
   }
 
   await connectDB()
 
   const normalizedEmail = email.toLowerCase()
-  const dbUser = await User.findOne({ email: normalizedEmail }).select('_id email role')
+  const dbUser = await User.findOne({ email: normalizedEmail }).select(
+    '_id email role status sessionVersion'
+  )
 
   if (!dbUser) {
     return {
       id: '',
-      role: getDefaultRoleForEmail(normalizedEmail),
+      role: 'user' as const,
+      sessionVersion: 0,
+      status: 'deleted' as const,
+      valid: false,
+    }
+  }
+
+  if (dbUser.status && dbUser.status !== 'active') {
+    return {
+      id: '',
+      role: 'user' as const,
+      sessionVersion: dbUser.sessionVersion ?? 0,
+      status: dbUser.status,
+      valid: false,
     }
   }
 
@@ -46,6 +67,9 @@ async function resolveAndSyncRole(email?: string | null) {
   return {
     id: dbUser._id.toString(),
     role: resolvedRole,
+    sessionVersion: dbUser.sessionVersion ?? 0,
+    status: (dbUser.status || 'active') as 'active',
+    valid: true,
   }
 }
 
@@ -70,6 +94,10 @@ export const authOptions: NextAuthOptions = {
           throw new Error('Email hoặc mật khẩu không đúng')
         }
 
+        if (user.status && user.status !== 'active') {
+          throw new Error('Tài khoản đã bị vô hiệu hóa')
+        }
+
         if (user.provider !== 'credentials' || !user.password) {
           throw new Error('Tài khoản này đăng ký bằng Google. Vui lòng đăng nhập bằng Google.')
         }
@@ -91,6 +119,7 @@ export const authOptions: NextAuthOptions = {
           name: user.name,
           image: user.avatar,
           role: resolvedRole,
+          sessionVersion: user.sessionVersion ?? 0,
         }
       },
     }),
@@ -141,8 +170,14 @@ export const authOptions: NextAuthOptions = {
             avatar: user.image || (profile as { picture?: string })?.picture,
             provider: 'google',
             role,
+            status: 'active',
+            sessionVersion: 0,
           })
           return true
+        }
+
+        if (existingUser.status && existingUser.status !== 'active') {
+          return false
         }
 
         // Prevent account takeover: credentials account cannot sign in via Google
@@ -178,17 +213,35 @@ export const authOptions: NextAuthOptions = {
       if (user) {
         token.id = user.id || token.id
         token.role = user.role || token.role
+        token.sessionVersion =
+          (user as { sessionVersion?: number }).sessionVersion ?? token.sessionVersion ?? 0
       }
 
       if (token.email) {
         const resolvedUser = await resolveAndSyncRole(token.email)
 
-        if (resolvedUser.id) {
-          token.id = resolvedUser.id
+        if (!resolvedUser.valid) {
+          token.id = ''
+          token.role = 'user'
+          token.sessionVersion = -1
+          return token
         }
 
-        // Role always from DB — never trust client
+        // Reject JWT if sessionVersion was bumped (e.g. account deleted / force logout)
+        if (
+          typeof token.sessionVersion === 'number' &&
+          token.sessionVersion >= 0 &&
+          token.sessionVersion !== resolvedUser.sessionVersion
+        ) {
+          token.id = ''
+          token.role = 'user'
+          token.sessionVersion = -1
+          return token
+        }
+
+        token.id = resolvedUser.id
         token.role = resolvedUser.role
+        token.sessionVersion = resolvedUser.sessionVersion
       } else if (!token.role) {
         token.role = 'user'
       }
@@ -197,8 +250,13 @@ export const authOptions: NextAuthOptions = {
     },
     async session({ session, token }) {
       if (session.user) {
-        session.user.id = (token.id as string) || ''
-        session.user.role = (token.role as 'user' | 'admin') || 'user'
+        if (!token.id || token.sessionVersion === -1) {
+          session.user.id = ''
+          session.user.role = 'user'
+        } else {
+          session.user.id = (token.id as string) || ''
+          session.user.role = (token.role as 'user' | 'admin') || 'user'
+        }
       }
 
       return session

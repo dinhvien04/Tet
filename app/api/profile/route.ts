@@ -24,10 +24,10 @@ export async function GET() {
     await connectDB()
 
     const user = await User.findById(sessionUser.id).select(
-      '_id email name avatar role provider createdAt'
+      '_id email name avatar role provider status createdAt'
     )
-    if (!user) {
-      return NextResponse.json({ error: 'Không tìm thấy tài khoản' }, { status: 404 })
+    if (!user || user.status === 'deleted') {
+      return NextResponse.json({ error: 'Không tìm thấy tài khoản' }, { status: 401 })
     }
 
     return NextResponse.json({
@@ -132,8 +132,10 @@ export async function PATCH(request: NextRequest) {
 }
 
 /**
- * DELETE body: { confirm: "XOA TAI KHOAN" } or { confirm: "DELETE" }
- * Soft-cleans related user data; does not delete families they created (keeps FK integrity).
+ * DELETE body: { confirm: "XOA TAI KHOAN" | "DELETE" }
+ * Soft-delete + anonymize: marks user deleted, bumps sessionVersion (JWT invalid),
+ * strips personal data, blocks when sole admin or active game reservations.
+ * See docs/DATA_DELETION.md
  */
 export async function DELETE(request: NextRequest) {
   try {
@@ -143,9 +145,7 @@ export async function DELETE(request: NextRequest) {
 
     if (confirm !== 'XOA TAI KHOAN' && confirm !== 'DELETE') {
       return NextResponse.json(
-        {
-          error: 'Cần xác nhận bằng chuỗi XOA TAI KHOAN hoặc DELETE',
-        },
+        { error: 'Cần xác nhận bằng chuỗi XOA TAI KHOAN hoặc DELETE' },
         { status: 400 }
       )
     }
@@ -153,13 +153,16 @@ export async function DELETE(request: NextRequest) {
     await connectDB()
 
     const user = await User.findById(sessionUser.id)
-    if (!user) {
-      return NextResponse.json({ error: 'Không tìm thấy tài khoản' }, { status: 404 })
+    if (!user || user.status === 'deleted') {
+      // Idempotent
+      return NextResponse.json({ success: true, alreadyDeleted: true })
     }
 
-    // Block if sole system admin
     if (user.role === 'admin') {
-      const adminCount = await User.countDocuments({ role: 'admin' })
+      const adminCount = await User.countDocuments({
+        role: 'admin',
+        status: { $ne: 'deleted' },
+      })
       if (adminCount <= 1) {
         return NextResponse.json(
           { error: 'Không thể xóa admin hệ thống cuối cùng' },
@@ -168,7 +171,6 @@ export async function DELETE(request: NextRequest) {
       }
     }
 
-    // Block if sole family admin in any family
     const adminMemberships = await FamilyMember.find({
       userId: user._id,
       role: 'admin',
@@ -189,7 +191,59 @@ export async function DELETE(request: NextRequest) {
       }
     }
 
+    // Block active game reservations
+    const wallets = await BauCuaWallet.find({ userId: user._id })
+    for (const w of wallets) {
+      if ((w.reservedBalance || 0) > 0) {
+        return NextResponse.json(
+          {
+            error:
+              'Bạn còn điểm đang giữ trong ván Bầu Cua. Hãy đợi ván kết thúc trước khi xóa tài khoản.',
+          },
+          { status: 400 }
+        )
+      }
+    }
+
+    const BauCuaRound = (await import('@/lib/models/BauCuaRound')).default
+    const hosting = await BauCuaRound.findOne({
+      hostUserId: user._id,
+      status: { $in: ['betting', 'rolling'] },
+    })
+    if (hosting) {
+      return NextResponse.json(
+        { error: 'Bạn đang là host của ván Bầu Cua. Hãy kết thúc ván trước.' },
+        { status: 400 }
+      )
+    }
+
     const uid = user._id
+    const now = new Date()
+
+    // Transfer family createdBy to another admin where possible
+    const Family = (await import('@/lib/models/Family')).default
+    const familiesCreated = await Family.find({ createdBy: uid })
+    for (const fam of familiesCreated) {
+      const otherAdmin = await FamilyMember.findOne({
+        familyId: fam._id,
+        role: 'admin',
+        userId: { $ne: uid },
+      })
+      if (otherAdmin) {
+        fam.createdBy = otherAdmin.userId
+        await fam.save()
+      }
+    }
+
+    // Soft-delete + anonymize (keep ObjectId for FK integrity)
+    user.status = 'deleted'
+    user.deletedAt = now
+    user.sessionVersion = (user.sessionVersion || 0) + 1
+    user.email = `deleted+${uid.toString()}@invalid.local`
+    user.name = 'Tài khoản đã xóa'
+    user.avatar = undefined
+    user.password = undefined
+    await user.save()
 
     await Promise.all([
       FamilyMember.deleteMany({ userId: uid }),
@@ -199,12 +253,13 @@ export async function DELETE(request: NextRequest) {
       EventRsvp.deleteMany({ userId: uid }),
       BauCuaBet.deleteMany({ userId: uid }),
       BauCuaWallet.deleteMany({ userId: uid }),
-      // Keep posts/photos as historical content but strip? Or delete:
       Post.deleteMany({ userId: uid }),
       Photo.deleteMany({ userId: uid }),
     ])
 
-    await User.deleteOne({ _id: uid })
+    // Cleanup join requests
+    const FamilyJoinRequest = (await import('@/lib/models/FamilyJoinRequest')).default
+    await FamilyJoinRequest.deleteMany({ userId: uid })
 
     console.log('[audit] account.deleted', { userId: sessionUser.id })
 

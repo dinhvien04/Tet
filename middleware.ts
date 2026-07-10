@@ -1,15 +1,19 @@
 import { withAuth } from 'next-auth/middleware'
 import { NextResponse } from 'next/server'
+import { applySecurityHeaders } from '@/lib/security-headers'
 
 export default withAuth(
   function middleware() {
-    // Middleware logic here if needed
-    return NextResponse.next()
+    const res = NextResponse.next()
+    return applySecurityHeaders(res, {
+      production: process.env.NODE_ENV === 'production',
+      // Start report-only until violations reviewed
+      reportOnlyCsp: process.env.CSP_ENFORCE !== 'true',
+    })
   },
   {
     callbacks: {
       authorized: ({ token, req }) => {
-        // Protected routes that require authentication
         const protectedRoutes = [
           '/dashboard',
           '/family',
@@ -27,9 +31,8 @@ export default withAuth(
 
         const isAdminRoute = req.nextUrl.pathname.startsWith('/admin')
 
-        // If accessing protected route, check if user is authenticated
         if (isProtectedRoute) {
-          if (!token) {
+          if (!token?.id) {
             return false
           }
 
@@ -40,7 +43,6 @@ export default withAuth(
           return true
         }
 
-        // Allow access to public routes
         return true
       },
     },
@@ -52,14 +54,6 @@ export default withAuth(
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - api/auth (NextAuth routes)
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public folder
-     */
     '/((?!api/auth|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }

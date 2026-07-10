@@ -1,17 +1,22 @@
 'use client'
 
 import { useEffect } from 'react'
-import { registerServiceWorker } from '@/lib/service-worker'
+import { purgeServiceWorkersAndCaches, SW_ENABLED } from '@/lib/service-worker'
 
 /**
- * Component to register service worker on mount
- * Provides offline support and caching capabilities
+ * By default disables Service Workers and clears legacy caches so private
+ * API/page data is never served across users on a shared device.
+ * Set NEXT_PUBLIC_ENABLE_SERVICE_WORKER=true only after a safe SW ships.
  */
 export function ServiceWorkerRegistration() {
   useEffect(() => {
-    // Only register in production
-    if (process.env.NODE_ENV === 'production') {
-      registerServiceWorker()
+    // Always purge old SW first (even in development)
+    void purgeServiceWorkersAndCaches()
+
+    if (SW_ENABLED && process.env.NODE_ENV === 'production') {
+      console.warn(
+        '[sw] ENABLE_SERVICE_WORKER is true but safe offline SW is not implemented; staying disabled'
+      )
     }
   }, [])
 

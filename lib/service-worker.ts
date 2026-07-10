@@ -1,91 +1,50 @@
 /**
- * Service Worker registration and management
- * Provides offline support and caching capabilities
+ * Service Worker management — privacy-first.
+ * Default: do NOT register SW that caches private data.
+ * Always unregister old workers and clear tet-connect caches.
  */
 
-export function registerServiceWorker() {
-  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
-    return
-  }
+export const SW_ENABLED =
+  process.env.NEXT_PUBLIC_ENABLE_SERVICE_WORKER === 'true'
 
-  window.addEventListener('load', async () => {
-    try {
-      const registration = await navigator.serviceWorker.register('/sw.js', {
-        scope: '/',
-      })
+/**
+ * Unregister all service workers and delete app caches.
+ * Safe to call on every load when SW is disabled.
+ */
+export async function purgeServiceWorkersAndCaches(): Promise<void> {
+  if (typeof window === 'undefined') return
 
-      console.log('Service Worker registered:', registration.scope)
-
-      // Check for updates
-      registration.addEventListener('updatefound', () => {
-        const newWorker = registration.installing
-        if (!newWorker) return
-
-        newWorker.addEventListener('statechange', () => {
-          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            // New service worker available
-            console.log('New service worker available')
-            
-            // Optionally notify user about update
-            if (window.confirm('Có phiên bản mới. Tải lại trang?')) {
-              newWorker.postMessage({ type: 'SKIP_WAITING' })
-              window.location.reload()
-            }
-          }
-        })
-      })
-
-      // Handle controller change
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        window.location.reload()
-      })
-    } catch (error) {
-      console.error('Service Worker registration failed:', error)
+  try {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations()
+      await Promise.all(registrations.map((r) => r.unregister()))
     }
-  })
+
+    if ('caches' in window) {
+      const names = await caches.keys()
+      await Promise.all(
+        names
+          .filter((name) => name.startsWith('tet-connect'))
+          .map((name) => caches.delete(name))
+      )
+    }
+  } catch (error) {
+    console.error('[sw] purge failed', error)
+  }
+}
+
+/** @deprecated Prefer purge; registration disabled by default for privacy */
+export function registerServiceWorker() {
+  if (typeof window === 'undefined') return
+  // Never register the legacy privacy-leaking worker unless explicitly enabled
+  // AND a safe sw is deployed later. Current public/sw.js is unsafe → always purge.
+  void purgeServiceWorkersAndCaches()
 }
 
 export function unregisterServiceWorker() {
-  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
-    return
-  }
-
-  navigator.serviceWorker.getRegistrations().then((registrations) => {
-    for (const registration of registrations) {
-      registration.unregister()
-    }
-  })
+  void purgeServiceWorkersAndCaches()
 }
 
 export function clearServiceWorkerCache() {
-  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
-    return
-  }
-
-  navigator.serviceWorker.controller?.postMessage({ type: 'CLEAR_CACHE' })
-}
-
-/**
- * Check if the app is running offline
- */
-export function isOffline(): boolean {
-  return typeof window !== 'undefined' && !navigator.onLine
-}
-
-/**
- * Listen for online/offline events
- */
-export function onNetworkChange(callback: (online: boolean) => void) {
-  if (typeof window === 'undefined') return
-
-  const handleOnline = () => callback(true)
-  const handleOffline = () => callback(false)
-
-  window.addEventListener('online', handleOnline)
-  window.addEventListener('offline', handleOffline)
-
-  return () => {
-    window.removeEventListener('online', handleOnline)
-    window.removeEventListener('offline', handleOffline)
-  }
+  void purgeServiceWorkersAndCaches()
 }

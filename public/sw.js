@@ -1,117 +1,37 @@
-// Service Worker for offline support and caching
-const CACHE_NAME = 'tet-connect-v1'
-const RUNTIME_CACHE = 'tet-connect-runtime'
+// Legacy Service Worker — intentionally inert (privacy).
+// Old clients may still load this file; it only purges caches and unregisters.
 
-// Assets to cache on install
-const PRECACHE_ASSETS = [
-  '/',
-  '/login',
-  '/dashboard',
-  '/offline',
-]
-
-// Install event - cache essential assets
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_ASSETS)
-    })
-  )
   self.skipWaiting()
+  event.waitUntil(
+    caches.keys().then((names) =>
+      Promise.all(
+        names
+          .filter((n) => n.startsWith('tet-connect'))
+          .map((n) => caches.delete(n))
+      )
+    )
+  )
 })
 
-// Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames
-          .filter((name) => name !== CACHE_NAME && name !== RUNTIME_CACHE)
-          .map((name) => caches.delete(name))
+    (async () => {
+      const names = await caches.keys()
+      await Promise.all(
+        names
+          .filter((n) => n.startsWith('tet-connect'))
+          .map((n) => caches.delete(n))
       )
-    })
-  )
-  self.clients.claim()
-})
-
-// Fetch event - network first, fallback to cache
-self.addEventListener('fetch', (event) => {
-  const { request } = event
-  const url = new URL(request.url)
-
-  // Skip cross-origin requests
-  if (url.origin !== location.origin) {
-    return
-  }
-
-  // Skip API requests for real-time data
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          // Cache successful API responses
-          if (response.ok) {
-            const responseClone = response.clone()
-            caches.open(RUNTIME_CACHE).then((cache) => {
-              cache.put(request, responseClone)
-            })
-          }
-          return response
-        })
-        .catch(() => {
-          // Return cached response if available
-          return caches.match(request).then((cachedResponse) => {
-            if (cachedResponse) {
-              return cachedResponse
-            }
-            // Return offline page for navigation requests
-            if (request.mode === 'navigate') {
-              return caches.match('/offline')
-            }
-            return new Response('Network error', {
-              status: 408,
-              headers: { 'Content-Type': 'text/plain' },
-            })
-          })
-        })
-    )
-    return
-  }
-
-  // For static assets, use cache first strategy
-  event.respondWith(
-    caches.match(request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse
-      }
-
-      return fetch(request).then((response) => {
-        // Cache successful responses
-        if (response.ok) {
-          const responseClone = response.clone()
-          caches.open(RUNTIME_CACHE).then((cache) => {
-            cache.put(request, responseClone)
-          })
-        }
-        return response
-      })
-    })
+      await self.clients.claim()
+      // Unregister this worker so it stops controlling pages
+      const reg = await self.registration
+      await reg.unregister()
+    })()
   )
 })
 
-// Message event - handle cache updates
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting()
-  }
-  
-  if (event.data && event.data.type === 'CLEAR_CACHE') {
-    event.waitUntil(
-      caches.keys().then((cacheNames) => {
-        return Promise.all(
-          cacheNames.map((name) => caches.delete(name))
-        )
-      })
-    )
-  }
+// Do not intercept fetch — no caching of any request
+self.addEventListener('fetch', () => {
+  // pass-through to network
 })

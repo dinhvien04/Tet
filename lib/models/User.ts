@@ -6,6 +6,8 @@ export interface INotificationPreferences {
   taskReminders: boolean
 }
 
+export type UserStatus = 'active' | 'deletion_pending' | 'deleted'
+
 export interface IUser {
   _id: mongoose.Types.ObjectId
   email: string
@@ -14,6 +16,10 @@ export interface IUser {
   avatar?: string
   role: UserRole
   provider: 'credentials' | 'google'
+  status: UserStatus
+  /** Bumped to invalidate existing JWTs */
+  sessionVersion: number
+  deletedAt?: Date | null
   notificationPreferences?: INotificationPreferences
   createdAt: Date
   updatedAt: Date
@@ -53,6 +59,20 @@ const UserSchema = new Schema<IUser>(
       type: String,
       enum: ['credentials', 'google'],
       default: 'credentials',
+    },
+    status: {
+      type: String,
+      enum: ['active', 'deletion_pending', 'deleted'],
+      default: 'active',
+      index: true,
+    },
+    sessionVersion: {
+      type: Number,
+      default: 0,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
     },
     notificationPreferences: {
       eventReminders: { type: Boolean, default: true },

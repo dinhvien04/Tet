@@ -105,17 +105,18 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const daily = await checkDailyQuota({
-      key: `ai:daily:${user.id}`,
-      limit: DAILY_QUOTA,
-    })
-    if (!daily.allowed) {
+    // Peek successful usage (do not increment until provider succeeds)
+    const { default: RateLimit } = await import('@/lib/models/RateLimit')
+    const { connectDB } = await import('@/lib/mongodb')
+    await connectDB()
+    const dayMs = 24 * 60 * 60 * 1000
+    const windowStartMs = Date.now() - (Date.now() % dayMs)
+    const successKey = `ai:success:${user.id}:${windowStartMs}`
+    const successRecord = await RateLimit.findOne({ key: successKey }).lean()
+    if (successRecord && successRecord.count >= DAILY_QUOTA) {
       return NextResponse.json(
         { error: 'Bạn đã hết hạn mức AI trong ngày. Vui lòng quay lại vào ngày mai.' },
-        {
-          status: 429,
-          headers: { 'Retry-After': String(daily.retryAfterSeconds) },
-        }
+        { status: 429 }
       )
     }
 
@@ -181,7 +182,19 @@ export async function POST(request: NextRequest) {
         usage?: { total_tokens?: number }
       }
 
-      const content = data.choices?.[0]?.message?.content || ''
+      const content = (data.choices?.[0]?.message?.content || '').trim()
+      if (!content || content.length > 4000) {
+        return NextResponse.json(
+          { error: 'Dịch vụ AI trả về nội dung không hợp lệ.' },
+          { status: 502 }
+        )
+      }
+
+      // Increment successful usage only after valid content
+      const daily = await checkDailyQuota({
+        key: `ai:success:${user.id}`,
+        limit: DAILY_QUOTA,
+      })
 
       console.log('[ai] usage', {
         userId: user.id,

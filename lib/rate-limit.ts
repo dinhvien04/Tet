@@ -5,75 +5,55 @@ export interface RateLimitResult {
   allowed: boolean
   remaining: number
   retryAfterSeconds: number
+  count: number
 }
 
 /**
- * MongoDB-backed fixed-window rate limiter (serverless-safe).
+ * Atomic fixed-window rate limit via unique bucket keys + $inc upsert.
+ * Key format: `{scope}:{identity}:{windowStartMs}`
+ * No read-before-write race on window reset.
  */
 export async function checkRateLimit(options: {
   key: string
   limit: number
   windowMs: number
 }): Promise<RateLimitResult> {
-  const { key, limit, windowMs } = options
+  const { key: baseKey, limit, windowMs } = options
   await connectDB()
 
-  const now = new Date()
-  const windowStart = new Date(now.getTime() - (now.getTime() % windowMs))
-  const expiresAt = new Date(windowStart.getTime() + windowMs)
-
-  const existing = await RateLimit.findOne({ key })
-
-  if (!existing || existing.windowStart.getTime() < windowStart.getTime()) {
-    await RateLimit.findOneAndUpdate(
-      { key },
-      {
-        $set: {
-          count: 1,
-          windowStart,
-          expiresAt,
-        },
-      },
-      { upsert: true, new: true }
-    )
-
-    return {
-      allowed: true,
-      remaining: Math.max(0, limit - 1),
-      retryAfterSeconds: Math.ceil(windowMs / 1000),
-    }
-  }
-
-  if (existing.count >= limit) {
-    const retryAfterMs = existing.expiresAt.getTime() - now.getTime()
-    return {
-      allowed: false,
-      remaining: 0,
-      retryAfterSeconds: Math.max(1, Math.ceil(retryAfterMs / 1000)),
-    }
-  }
+  const now = Date.now()
+  const windowStartMs = now - (now % windowMs)
+  const bucketKey = `${baseKey}:${windowStartMs}`
+  const expiresAt = new Date(windowStartMs + windowMs + 60_000) // grace for TTL
 
   const updated = await RateLimit.findOneAndUpdate(
-    { key, count: { $lt: limit }, windowStart: existing.windowStart },
-    { $inc: { count: 1 } },
-    { new: true }
+    { key: bucketKey },
+    {
+      $inc: { count: 1 },
+      $setOnInsert: {
+        windowStart: new Date(windowStartMs),
+        expiresAt,
+      },
+    },
+    {
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: true,
+    }
   )
 
-  if (!updated) {
-    return {
-      allowed: false,
-      remaining: 0,
-      retryAfterSeconds: Math.max(
-        1,
-        Math.ceil((existing.expiresAt.getTime() - now.getTime()) / 1000)
-      ),
-    }
-  }
+  const count = updated?.count ?? 1
+  const allowed = count <= limit
+  const retryAfterSeconds = Math.max(
+    1,
+    Math.ceil((windowStartMs + windowMs - now) / 1000)
+  )
 
   return {
-    allowed: true,
-    remaining: Math.max(0, limit - updated.count),
-    retryAfterSeconds: Math.ceil(windowMs / 1000),
+    allowed,
+    remaining: Math.max(0, limit - count),
+    retryAfterSeconds,
+    count,
   }
 }
 

@@ -32,6 +32,16 @@ vi.mock('@/lib/rate-limit', () => ({
   checkDailyQuota: (...args: unknown[]) => mockCheckDailyQuota(...args),
 }))
 
+vi.mock('@/lib/mongodb', () => ({
+  connectDB: vi.fn(async () => ({})),
+}))
+
+vi.mock('@/lib/models/RateLimit', () => ({
+  default: {
+    findOne: vi.fn(() => ({ lean: async () => null })),
+  },
+}))
+
 import { POST } from '@/app/api/ai/generate/route'
 import { AuthError } from '@/lib/authorization'
 

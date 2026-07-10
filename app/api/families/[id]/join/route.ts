@@ -4,66 +4,85 @@ import Family from '@/lib/models/Family'
 import FamilyMember from '@/lib/models/FamilyMember'
 import FamilyJoinRequest from '@/lib/models/FamilyJoinRequest'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { isInviteValid } from '@/lib/invite'
 import {
   AuthError,
   authErrorResponse,
   requireUser,
 } from '@/lib/authorization'
-import mongoose from 'mongoose'
+import { jsonPrivate } from '@/lib/http-cache'
+
+function clientIp(request: NextRequest): string {
+  return (
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    request.headers.get('x-real-ip') ||
+    'unknown'
+  )
+}
 
 /**
- * POST /api/families/:id/join
- * :id can be family ObjectId OR invite code (legacy).
- * Body optional: { inviteCode?, message? }
+ * POST — join family ONLY with inviteCode (never family ObjectId alone).
+ * Body: { inviteCode: string, message?: string }
+ * :id path param is ignored for authorization (legacy path kept for URL shape).
  */
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params
-    const user = await requireUser()
-    const body = await request.json().catch(() => ({}))
-    const message =
-      typeof body.message === 'string' ? body.message.trim().slice(0, 300) : undefined
+    // consume params to satisfy Next (id must not be used as secret)
+    await params
 
-    // Rate limit join attempts per user
-    const rate = await checkRateLimit({
-      key: `join:${user.id}`,
-      limit: 10,
-      windowMs: 60 * 60 * 1000,
-    })
-    if (!rate.allowed) {
-      return NextResponse.json(
+    const user = await requireUser()
+    const body = await request.json().catch(() => null)
+    if (!body || typeof body !== 'object') {
+      return jsonPrivate({ error: 'JSON body không hợp lệ' }, { status: 400 })
+    }
+
+    const inviteCodeRaw = (body as { inviteCode?: unknown }).inviteCode
+    if (typeof inviteCodeRaw !== 'string' || !inviteCodeRaw.trim()) {
+      return jsonPrivate(
+        { error: 'Bắt buộc inviteCode. Không thể join chỉ bằng family id.' },
+        { status: 400 }
+      )
+    }
+
+    const inviteCode = inviteCodeRaw.trim().toUpperCase()
+    // Never log invite codes
+    const message =
+      typeof (body as { message?: unknown }).message === 'string'
+        ? (body as { message: string }).message.trim().slice(0, 300)
+        : undefined
+
+    const ip = clientIp(request)
+    const [userRate, ipRate, codeRate] = await Promise.all([
+      checkRateLimit({ key: `join:user:${user.id}`, limit: 10, windowMs: 3_600_000 }),
+      checkRateLimit({ key: `join:ip:${ip}`, limit: 30, windowMs: 3_600_000 }),
+      checkRateLimit({ key: `join:code:${inviteCode}`, limit: 40, windowMs: 3_600_000 }),
+    ])
+
+    if (!userRate.allowed || !ipRate.allowed || !codeRate.allowed) {
+      const retry = Math.max(
+        userRate.retryAfterSeconds,
+        ipRate.retryAfterSeconds,
+        codeRate.retryAfterSeconds
+      )
+      return jsonPrivate(
         { error: 'Quá nhiều lần thử tham gia. Vui lòng thử lại sau.' },
-        { status: 429, headers: { 'Retry-After': String(rate.retryAfterSeconds) } }
+        { status: 429 }
       )
     }
 
     await connectDB()
 
-    const inviteCode = (body.inviteCode || id || '').toString().toUpperCase()
-    let family = null as Awaited<ReturnType<typeof Family.findById>> | null
-
-    if (mongoose.Types.ObjectId.isValid(id) && id.length === 24) {
-      family = await Family.findById(id)
-      if (family && body.inviteCode && family.inviteCode !== String(body.inviteCode).toUpperCase()) {
-        return NextResponse.json({ error: 'Mã mời không khớp' }, { status: 400 })
-      }
-    }
-
-    if (!family && inviteCode) {
-      family = await Family.findOne({ inviteCode })
-    }
-
+    const family = await Family.findOne({ inviteCode })
     if (!family) {
-      return NextResponse.json({ error: 'Mã mời không hợp lệ' }, { status: 404 })
+      return jsonPrivate({ error: 'Mã mời không hợp lệ' }, { status: 404 })
     }
 
-    const { isInviteValid } = await import('@/lib/invite')
     const validity = isInviteValid(family)
     if (!validity.valid) {
-      return NextResponse.json({ error: validity.reason }, { status: 410 })
+      return jsonPrivate({ error: validity.reason }, { status: 410 })
     }
 
     const existingMember = await FamilyMember.findOne({
@@ -71,7 +90,7 @@ export async function POST(
       userId: user.id,
     })
     if (existingMember) {
-      return NextResponse.json(
+      return jsonPrivate(
         { error: 'Bạn đã là thành viên của nhà này' },
         { status: 400 }
       )
@@ -83,82 +102,78 @@ export async function POST(
       status: 'pending',
     })
     if (pending) {
-      return NextResponse.json({
+      return jsonPrivate({
         success: true,
         pending: true,
         message: 'Yêu cầu tham gia đang chờ admin duyệt',
-        request: {
-          id: pending._id.toString(),
-          status: pending.status,
-        },
-        family: {
-          id: family._id.toString(),
-          name: family.name,
-        },
+        request: { id: pending._id.toString(), status: pending.status },
+        family: { id: family._id.toString(), name: family.name },
       })
     }
 
-    // Immediate join if approval not required
     if (!family.requireJoinApproval) {
-      await FamilyMember.create({
-        familyId: family._id,
-        userId: user.id,
-        role: 'member',
-      })
-      // Close any old rejected requests
-      await FamilyJoinRequest.updateMany(
-        { familyId: family._id, userId: user.id, status: { $ne: 'approved' } },
-        { $set: { status: 'approved', reviewedAt: new Date() } }
-      )
+      try {
+        await FamilyMember.create({
+          familyId: family._id,
+          userId: user.id,
+          role: 'member',
+        })
+      } catch (err: unknown) {
+        const e = err as { code?: number }
+        if (e.code === 11000) {
+          return jsonPrivate({
+            success: true,
+            pending: false,
+            family: { id: family._id.toString(), name: family.name },
+          })
+        }
+        throw err
+      }
 
-      return NextResponse.json({
+      return jsonPrivate({
         success: true,
         pending: false,
-        family: {
-          id: family._id.toString(),
-          name: family.name,
-        },
+        family: { id: family._id.toString(), name: family.name },
       })
     }
 
-    const joinRequest = await FamilyJoinRequest.create({
-      familyId: family._id,
-      userId: user.id,
-      status: 'pending',
-      message,
-    })
-
-    return NextResponse.json(
-      {
-        success: true,
-        pending: true,
-        message: 'Đã gửi yêu cầu. Vui lòng chờ admin duyệt.',
-        request: {
-          id: joinRequest._id.toString(),
-          status: joinRequest.status,
+    try {
+      const joinRequest = await FamilyJoinRequest.create({
+        familyId: family._id,
+        userId: user.id,
+        status: 'pending',
+        message,
+      })
+      return jsonPrivate(
+        {
+          success: true,
+          pending: true,
+          message: 'Đã gửi yêu cầu. Vui lòng chờ admin duyệt.',
+          request: {
+            id: joinRequest._id.toString(),
+            status: joinRequest.status,
+          },
+          family: { id: family._id.toString(), name: family.name },
         },
-        family: {
-          id: family._id.toString(),
-          name: family.name,
-        },
-      },
-      { status: 201 }
-    )
+        { status: 201 }
+      )
+    } catch (err: unknown) {
+      const e = err as { code?: number }
+      if (e.code === 11000) {
+        return jsonPrivate({
+          success: true,
+          pending: true,
+          message: 'Yêu cầu tham gia đang chờ admin duyệt',
+        })
+      }
+      throw err
+    }
   } catch (error) {
     if (error instanceof AuthError) {
       const { error: message, status } = authErrorResponse(error)
-      return NextResponse.json({ error: message }, { status })
+      return jsonPrivate({ error: message }, { status })
     }
-    // Duplicate pending key
-    const err = error as { code?: number }
-    if (err.code === 11000) {
-      return NextResponse.json({
-        success: true,
-        pending: true,
-        message: 'Yêu cầu tham gia đang chờ admin duyệt',
-      })
-    }
-    console.error('Error joining family:', error)
-    return NextResponse.json({ error: 'Không thể tham gia nhà' }, { status: 500 })
+    console.error('Error joining family')
+    return jsonPrivate({ error: 'Không thể tham gia nhà' }, { status: 500 })
   }
 }

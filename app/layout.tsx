@@ -26,7 +26,8 @@ export const metadata: Metadata = {
   description: "Kết nối gia đình trong dịp Tết",
 };
 
-export const dynamic = 'force-dynamic'
+// Landing can be static-capable; authenticated segments force dynamic via their own routes.
+// Avoid force-dynamic on the entire app tree.
 
 export default function RootLayout({
   children,
