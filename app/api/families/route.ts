@@ -102,12 +102,20 @@ export async function GET(request: NextRequest) {
         )
       }
 
+      const { isInviteValid } = await import('@/lib/invite')
+      const validity = isInviteValid(family)
+      if (!validity.valid) {
+        return NextResponse.json({ error: validity.reason }, { status: 410 })
+      }
+
       return NextResponse.json({
         families: [{
           id: family._id.toString(),
           name: family.name,
           invite_code: family.inviteCode,
           created_at: family.createdAt,
+          invite_expires_at: family.inviteExpiresAt || null,
+          require_join_approval: family.requireJoinApproval ?? false,
         }]
       })
     }

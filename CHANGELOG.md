@@ -21,10 +21,12 @@
 ### P2 — Product
 - CRUD post/event/task/photo/comment với authz
 - Regenerate invite; join request + admin approve/reject; requireJoinApproval
+- Invite expiry (optional days) + revoke via regenerate
 - RSVP sự kiện; export `.ics`
 - Profile: name/avatar, password, delete account, export JSON, notification prefs
 - Notification mark all; event filter upcoming/past
 - Bầu Cua UI: chips, countdown, admin controls, tiếng Việt
+- Theme toggle (light/dark/system)
 
 ## Notes
 - Game chỉ điểm ảo — không thanh toán.

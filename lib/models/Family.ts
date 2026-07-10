@@ -7,6 +7,8 @@ export interface IFamily {
   createdBy: mongoose.Types.ObjectId
   /** When true, join via invite creates a pending request for admin approval */
   requireJoinApproval: boolean
+  /** When set, invite code is invalid after this time */
+  inviteExpiresAt?: Date | null
   createdAt: Date
   updatedAt: Date
 }
@@ -32,6 +34,10 @@ const FamilySchema = new Schema<IFamily>(
     requireJoinApproval: {
       type: Boolean,
       default: false,
+    },
+    inviteExpiresAt: {
+      type: Date,
+      default: null,
     },
   },
   {

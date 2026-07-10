@@ -2,31 +2,33 @@
 
 ## Tổng quan
 
-Tết Connect được xây dựng theo kiến trúc modern web application với các lớp rõ ràng:
+Tết Connect là Next.js App Router full-stack, backend MongoDB + NextAuth (không còn Supabase runtime).
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        Client Layer                          │
-│  Next.js 14 (App Router) + React + Tailwind + Shadcn/ui    │
+│  Next.js App Router + React + Tailwind + Shadcn/ui + SWR   │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                     API Layer (Next.js)                      │
-│  - API Routes (/api/*)                                       │
-│  - Server Actions                                            │
-│  - Gemini AI Integration                                     │
+│  - Route Handlers /api/*                                     │
+│  - NextAuth JWT (Credentials + Google)                       │
+│  - MegaLLM AI + Cloudinary + Vercel Cron                     │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                    Supabase Backend                          │
-│  - PostgreSQL Database                                       │
-│  - Authentication (Google OAuth)                             │
-│  - Storage (Images, Videos)                                  │
-│  - Realtime (WebSocket subscriptions)                        │
+│                    MongoDB + services                        │
+│  - Mongoose models (families, posts, games, …)               │
+│  - Auth session JWT                                          │
+│  - Cloudinary images                                         │
+│  - Polling (không WebSocket Supabase)                        │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+Xem thêm: `docs/SECURITY.md`, `docs/MONGODB_INDEXES.md`, `CHANGELOG.md`.
 
 ## Cấu trúc Thư mục
 

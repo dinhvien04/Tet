@@ -60,6 +60,12 @@ export async function POST(
       return NextResponse.json({ error: 'Mã mời không hợp lệ' }, { status: 404 })
     }
 
+    const { isInviteValid } = await import('@/lib/invite')
+    const validity = isInviteValid(family)
+    if (!validity.valid) {
+      return NextResponse.json({ error: validity.reason }, { status: 410 })
+    }
+
     const existingMember = await FamilyMember.findOne({
       familyId: family._id,
       userId: user.id,

@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/hooks/useAuth'
 import { FamilySelector } from '@/components/family/FamilySelector'
 import { Button } from '@/components/ui/button'
+import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { cn } from '@/lib/utils'
 
 interface SidebarProps {
@@ -62,7 +63,11 @@ export function Sidebar({ className }: SidebarProps) {
         })}
       </nav>
 
-      <div className="p-4 border-t">
+      <div className="space-y-2 border-t border-border p-4">
+        <div className="flex items-center justify-between px-2">
+          <span className="text-sm text-muted-foreground">Giao diện</span>
+          <ThemeToggle />
+        </div>
         <Button variant="ghost" className="w-full justify-start gap-3" onClick={signOut}>
           <LogOut className="h-5 w-5" />
           <span>Đăng xuất</span>

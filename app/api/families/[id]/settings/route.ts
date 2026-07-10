@@ -17,7 +17,7 @@ export async function GET(
     await connectDB()
 
     const family = await Family.findById(familyId).select(
-      'name inviteCode requireJoinApproval'
+      'name inviteCode requireJoinApproval inviteExpiresAt'
     )
     if (!family) {
       return NextResponse.json({ error: 'Không tìm thấy nhà' }, { status: 404 })
@@ -28,6 +28,7 @@ export async function GET(
         name: family.name,
         inviteCode: family.inviteCode,
         requireJoinApproval: family.requireJoinApproval ?? false,
+        inviteExpiresAt: family.inviteExpiresAt || null,
       },
     })
   } catch (error) {
@@ -60,6 +61,13 @@ export async function PATCH(
     if (typeof body.name === 'string' && body.name.trim()) {
       family.name = body.name.trim().slice(0, 100)
     }
+    if ('inviteExpiresInDays' in body) {
+      const { computeInviteExpiry } = await import('@/lib/invite')
+      family.inviteExpiresAt =
+        body.inviteExpiresInDays === null
+          ? null
+          : computeInviteExpiry(Number(body.inviteExpiresInDays))
+    }
 
     await family.save()
 
@@ -69,6 +77,7 @@ export async function PATCH(
         name: family.name,
         inviteCode: family.inviteCode,
         requireJoinApproval: family.requireJoinApproval,
+        inviteExpiresAt: family.inviteExpiresAt || null,
       },
     })
   } catch (error) {

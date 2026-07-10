@@ -5,6 +5,7 @@ import { AuthProvider } from "@/components/auth/AuthProvider";
 import { FamilyProvider } from "@/components/family/FamilyContext";
 import { Toaster } from "@/components/ui/sonner";
 import { SWRProvider } from "@/components/providers/SWRProvider";
+import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import { NetworkStatus } from "@/components/ui/NetworkStatus";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
 import { ErrorBoundary } from "@/components/errors/ErrorBoundary";
@@ -33,23 +34,25 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="vi">
+    <html lang="vi" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <GlobalErrorHandler />
         <ErrorBoundary>
-          <SWRProvider>
-            <AuthProvider>
-              <FamilyProvider>
-                {children}
-              </FamilyProvider>
-            </AuthProvider>
-          </SWRProvider>
+          <ThemeProvider>
+            <SWRProvider>
+              <AuthProvider>
+                <FamilyProvider>
+                  {children}
+                </FamilyProvider>
+              </AuthProvider>
+            </SWRProvider>
+            <Toaster />
+            <NetworkStatus />
+            <ServiceWorkerRegistration />
+          </ThemeProvider>
         </ErrorBoundary>
-        <Toaster />
-        <NetworkStatus />
-        <ServiceWorkerRegistration />
       </body>
     </html>
   );

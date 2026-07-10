@@ -274,15 +274,70 @@ export default function FamilyPage() {
               </div>
 
               {isCurrentUserAdmin && (
-                <label className="flex items-center gap-3 text-sm">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4"
-                    checked={requireJoinApproval}
-                    onChange={(e) => void toggleJoinApproval(e.target.checked)}
-                  />
-                  Yêu cầu admin duyệt khi ai đó join bằng mã mời
-                </label>
+                <div className="space-y-3">
+                  <label className="flex items-center gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={requireJoinApproval}
+                      onChange={(e) => void toggleJoinApproval(e.target.checked)}
+                    />
+                    Yêu cầu admin duyệt khi ai đó join bằng mã mời
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        if (!currentFamily?.id) return
+                        const res = await fetch(
+                          `/api/families/${currentFamily.id}/invite`,
+                          {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ expiresInDays: 30 }),
+                          }
+                        )
+                        const data = await res.json()
+                        if (res.ok) {
+                          alert(
+                            `Mã mới: ${data.family.inviteCode}\nHết hạn: ${
+                              data.family.inviteExpiresAt
+                                ? new Date(data.family.inviteExpiresAt).toLocaleString('vi-VN')
+                                : 'không'
+                            }`
+                          )
+                          window.location.reload()
+                        } else {
+                          alert(data.error || 'Không tạo được mã')
+                        }
+                      }}
+                    >
+                      Tạo mã mời mới (30 ngày)
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        if (!currentFamily?.id) return
+                        const res = await fetch(
+                          `/api/families/${currentFamily.id}/settings`,
+                          {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ inviteExpiresInDays: null }),
+                          }
+                        )
+                        if (res.ok) alert('Đã bỏ hạn mã mời')
+                        else alert('Không cập nhật được')
+                      }}
+                    >
+                      Bỏ hết hạn mã mời
+                    </Button>
+                  </div>
+                </div>
               )}
             </CardContent>
           </Card>
