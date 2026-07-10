@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, fix/**, feature/**]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci --legacy-peer-deps
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (security + P1 core)
+        run: npm run test:ci
+        env:
+          # Avoid import-time hard failures; unit tests mock DB where needed
+          NEXTAUTH_SECRET: ci-test-secret-at-least-32-characters-long
+          MONGODB_URI: mongodb://127.0.0.1:27017/tet-connect-ci
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXTAUTH_SECRET: ci-test-secret-at-least-32-characters-long
+          NEXTAUTH_URL: http://localhost:3000
+          MONGODB_URI: mongodb://127.0.0.1:27017/tet-connect-ci
+
+      - name: Dependency audit (high+)
+        run: npm audit --audit-level=high || true

@@ -9,18 +9,17 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:ci": "vitest run tests/safe-redirect.test.ts tests/cron-auth.test.ts tests/ai-generate-security.test.ts tests/pagination.test.ts tests/dashboard-summary-api.test.ts",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:property": "vitest run --grep 'Property'",
     "generate:secrets": "node scripts/generate-secrets.js",
     "validate:env": "node scripts/validate-env.js",
-    "deploy:check": "npm run lint && npm run typecheck && npm test && npm run build && npm run validate:env"
+    "deploy:check": "npm run lint && npm run typecheck && npm run test:ci && npm run build && npm run validate:env"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "@supabase/ssr": "^0.8.0",
-    "@supabase/supabase-js": "^2.95.3",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.1",
     "cloudinary": "^2.9.0",

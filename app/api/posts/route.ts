@@ -93,9 +93,14 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url)
     const familyId = searchParams.get('familyId')
-    const from = parseInt(searchParams.get('from') || '0', 10)
-    const to = parseInt(searchParams.get('to') || '49', 10)
-    const limit = Math.max(1, to - from + 1)
+    // Prefer cursor pagination; keep from/to for backward compatibility
+    const { parseLimit, decodeCursor, cursorFilter, buildNextCursor } = await import(
+      '@/lib/api/pagination'
+    )
+    const limit = parseLimit(searchParams.get('limit') || searchParams.get('to'))
+    const cursor = decodeCursor(searchParams.get('cursor'))
+    const from = Math.max(0, parseInt(searchParams.get('from') || '0', 10) || 0)
+
     if (!familyId) {
       return NextResponse.json({ error: 'Thieu familyId' }, { status: 400 })
     }
@@ -113,12 +118,23 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const posts = await Post.find({ familyId })
+    const filter = {
+      familyId,
+      ...cursorFilter(cursor, 'createdAt'),
+    }
+
+    let query = Post.find(filter)
       .populate('userId', 'name email avatar')
-      .sort({ createdAt: -1 })
-      .skip(from)
+      .sort({ createdAt: -1, _id: -1 })
       .limit(limit)
-      .lean()
+
+    // Legacy offset only when no cursor provided
+    if (!cursor && from > 0) {
+      query = query.skip(Math.min(from, 500))
+    }
+
+    const posts = await query.lean()
+    const nextCursor = buildNextCursor(posts as Array<{ createdAt: Date; _id: { toString(): string } }>, limit)
 
     const postIds = posts.map((postDoc) => postDoc._id.toString())
 
@@ -178,7 +194,11 @@ export async function GET(request: NextRequest) {
       }
     })
 
-    return NextResponse.json({ posts: formattedPosts })
+    return NextResponse.json({
+      posts: formattedPosts,
+      nextCursor,
+      limit,
+    })
   } catch (error) {
     console.error('Error fetching posts:', error)
     return NextResponse.json({ error: 'Khong the lay danh sach bai dang' }, { status: 500 })

@@ -1,20 +1,19 @@
+'use client'
+
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { createClient } from '@/lib/supabase'
-import type {
-  RealtimeChannel,
-  RealtimePostgresChangesPayload,
-  REALTIME_SUBSCRIBE_STATES,
-} from '@supabase/supabase-js'
 
 interface UseRealtimeWithFallbackOptions<T> {
   channelName: string
-  table: string
+  /** @deprecated Supabase realtime removed — kept for API compatibility */
+  table?: string
   filter?: string
-  onInsert?: (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => void
-  onUpdate?: (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => void
-  onDelete?: (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => void
-  pollInterval?: number // milliseconds, default 5000
+  onInsert?: (payload: unknown) => void
+  onUpdate?: (payload: unknown) => void
+  onDelete?: (payload: unknown) => void
+  pollInterval?: number
   fetchData: () => Promise<T>
+  /** Pause polling when document is hidden */
+  pauseWhenHidden?: boolean
 }
 
 interface RealtimeStatus {
@@ -24,170 +23,75 @@ interface RealtimeStatus {
 }
 
 /**
- * Custom hook that provides realtime subscriptions with automatic fallback to polling
- * when WebSocket connection fails
+ * Polling-based live updates (MongoDB stack — no Supabase Realtime).
+ * Pauses when the tab is hidden to reduce load.
  */
 export function useRealtimeWithFallback<T>({
   channelName,
-  table,
-  filter,
-  onInsert,
-  onUpdate,
-  onDelete,
-  pollInterval = 5000,
+  pollInterval = 15_000,
   fetchData,
+  pauseWhenHidden = true,
 }: UseRealtimeWithFallbackOptions<T>) {
   const [status, setStatus] = useState<RealtimeStatus>({
     isConnected: false,
     isPolling: false,
     lastUpdate: null,
   })
-  
-  const supabase = createClient()
-  const channelRef = useRef<RealtimeChannel | null>(null)
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const isMountedRef = useRef(true)
+  const fetchDataRef = useRef(fetchData)
+  fetchDataRef.current = fetchData
 
-  // Start polling as fallback
-  const startPolling = useCallback(() => {
-    if (pollingIntervalRef.current) return // Already polling
-
-    console.log(`[Realtime Fallback] Starting polling for ${channelName}`)
-    setStatus(prev => ({ ...prev, isPolling: true, isConnected: false }))
-
-    pollingIntervalRef.current = setInterval(async () => {
-      if (!isMountedRef.current) return
-      
-      try {
-        await fetchData()
-        setStatus(prev => ({ ...prev, lastUpdate: new Date() }))
-      } catch (error) {
-        console.error('[Realtime Fallback] Polling error:', error)
-      }
-    }, pollInterval)
-  }, [channelName, fetchData, pollInterval])
-
-  // Stop polling
   const stopPolling = useCallback(() => {
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current)
       pollingIntervalRef.current = null
-      setStatus(prev => ({ ...prev, isPolling: false }))
-      console.log(`[Realtime Fallback] Stopped polling for ${channelName}`)
+      setStatus((prev) => ({ ...prev, isPolling: false }))
     }
-  }, [channelName])
+  }, [])
 
-  // Setup realtime subscription
+  const startPolling = useCallback(() => {
+    if (pollingIntervalRef.current) return
+
+    setStatus((prev) => ({ ...prev, isPolling: true, isConnected: false }))
+
+    pollingIntervalRef.current = setInterval(async () => {
+      if (!isMountedRef.current) return
+      if (pauseWhenHidden && typeof document !== 'undefined' && document.hidden) {
+        return
+      }
+
+      try {
+        await fetchDataRef.current()
+        if (isMountedRef.current) {
+          setStatus((prev) => ({ ...prev, lastUpdate: new Date() }))
+        }
+      } catch (error) {
+        console.error(`[poll:${channelName}]`, error)
+      }
+    }, pollInterval)
+  }, [channelName, pollInterval, pauseWhenHidden])
+
   useEffect(() => {
     isMountedRef.current = true
-    let subscriptionAttempts = 0
-    const maxAttempts = 3
+    startPolling()
 
-    const setupSubscription = () => {
-      const channel = supabase.channel(channelName)
-
-      // Add INSERT listener if provided
-      if (onInsert) {
-        channel.on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table,
-            ...(filter && { filter }),
-          },
-          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-            if (isMountedRef.current) {
-              onInsert(payload)
-              setStatus(prev => ({ ...prev, lastUpdate: new Date() }))
-            }
-          }
-        )
-      }
-
-      // Add UPDATE listener if provided
-      if (onUpdate) {
-        channel.on(
-          'postgres_changes',
-          {
-            event: 'UPDATE',
-            schema: 'public',
-            table,
-            ...(filter && { filter }),
-          },
-          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-            if (isMountedRef.current) {
-              onUpdate(payload)
-              setStatus(prev => ({ ...prev, lastUpdate: new Date() }))
-            }
-          }
-        )
-      }
-
-      // Add DELETE listener if provided
-      if (onDelete) {
-        channel.on(
-          'postgres_changes',
-          {
-            event: 'DELETE',
-            schema: 'public',
-            table,
-            ...(filter && { filter }),
-          },
-          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-            if (isMountedRef.current) {
-              onDelete(payload)
-              setStatus(prev => ({ ...prev, lastUpdate: new Date() }))
-            }
-          }
-        )
-      }
-
-      // Subscribe with status callback
-      channel.subscribe((status: REALTIME_SUBSCRIBE_STATES, error?: Error) => {
-        if (!isMountedRef.current) return
-
-        if (status === 'SUBSCRIBED') {
-          console.log(`[Realtime] Connected to ${channelName}`)
-          setStatus(prev => ({ ...prev, isConnected: true, isPolling: false }))
-          stopPolling() // Stop polling if it was running
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.error(`[Realtime] Error on ${channelName}:`, error)
-          subscriptionAttempts++
-          
-          if (subscriptionAttempts >= maxAttempts) {
-            console.log(`[Realtime] Max attempts reached, falling back to polling`)
-            setStatus(prev => ({ ...prev, isConnected: false }))
-            startPolling()
-          }
-        } else if (status === 'CLOSED') {
-          console.log(`[Realtime] Connection closed for ${channelName}`)
-          setStatus(prev => ({ ...prev, isConnected: false }))
-          
-          // Fallback to polling if connection closes unexpectedly
-          if (isMountedRef.current) {
-            startPolling()
-          }
-        }
-      })
-
-      channelRef.current = channel
+    const onVisibility = () => {
+      // no-op: interval checks document.hidden
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility)
     }
 
-    setupSubscription()
-
-    // Cleanup
     return () => {
       isMountedRef.current = false
-      
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current)
-        channelRef.current = null
-      }
-      
       stopPolling()
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility)
+      }
     }
-  }, [channelName, table, filter, onInsert, onUpdate, onDelete, startPolling, stopPolling, supabase])
+  }, [startPolling, stopPolling])
 
   return status
 }

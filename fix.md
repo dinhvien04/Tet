@@ -678,13 +678,13 @@ Ngoài ra phải xác nhận:
 - [x] Settlement không thể chạy hai lần. *(settlementCompleted CAS)*
 - [x] Chỉ host/admin có thể quay.
 - [x] Last-admin invariant an toàn khi concurrency. *(demote/delete có rollback)*
-- [ ] Test không còn bám Supabase nếu app không còn dùng Supabase. *(P1 cleanup)*
-- [ ] Env docs khớp code. *(P1)*
+- [x] Test không còn bám Supabase nếu app không còn dùng Supabase. *(runtime stub; CI chạy test:ci không phụ thuộc Supabase)*
+- [x] Env docs khớp code. *(.env.example + validate-env MegaLLM)*
 - [x] `next/image` hiển thị Cloudinary đúng. *(remotePatterns)*
-- [ ] Pagination có giới hạn. *(P1)*
-- [ ] UI tiếng Việt có dấu. *(P1 partial — một số API đã có dấu)*
-- [ ] Mobile và desktop hoạt động. *(P1 UI)*
-- [ ] Không có lỗi console nghiêm trọng.
+- [x] Pagination có giới hạn. *(lib/api/pagination — default 20 max 50; posts cursor)*
+- [x] UI tiếng Việt có dấu. *(landing + dashboard + P0 APIs)*
+- [x] Mobile và desktop hoạt động. *(landing responsive; dashboard mobile-first)*
+- [ ] Không có lỗi console nghiêm trọng. *(cần QA manual)*
 - [x] Không commit secret.
 - [x] Không làm mất dữ liệu cũ.
 

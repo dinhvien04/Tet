@@ -1,57 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
 import { connectDB } from '@/lib/mongodb'
 import User from '@/lib/models/User'
 import Family from '@/lib/models/Family'
 import Post from '@/lib/models/Post'
 import Event from '@/lib/models/Event'
 import Photo from '@/lib/models/Photo'
-import { getDefaultRoleForEmail, isSystemAdminEmail, isUserRole } from '@/lib/system-admin'
+import {
+  getDefaultRoleForEmail,
+  isSystemAdminEmail,
+  isUserRole,
+} from '@/lib/system-admin'
+import {
+  AuthError,
+  authErrorResponse,
+  parseObjectId,
+  requireSystemAdmin,
+} from '@/lib/authorization'
+import { parseLimit, DEFAULT_PAGE_LIMIT } from '@/lib/api/pagination'
 
-async function requireSystemAdmin() {
-  const session = await getServerSession(authOptions)
-  if (!session?.user?.id) {
-    return { error: NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 }) }
-  }
-
-  await connectDB()
-
-  const currentUser = await User.findById(session.user.id).select('_id email role')
-  if (!currentUser) {
-    return { error: NextResponse.json({ error: 'Khong tim thay tai khoan' }, { status: 404 }) }
-  }
-
-  const resolvedRole = currentUser.role || getDefaultRoleForEmail(currentUser.email)
-  if (currentUser.role !== resolvedRole) {
-    currentUser.role = resolvedRole
-    await currentUser.save()
-  }
-
-  if (resolvedRole !== 'admin') {
-    return { error: NextResponse.json({ error: 'Ban khong co quyen admin' }, { status: 403 }) }
-  }
-
-  return { currentUser }
-}
-
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const auth = await requireSystemAdmin()
-    if ('error' in auth) {
-      return auth.error
+    await requireSystemAdmin()
+    await connectDB()
+
+    const { searchParams } = new URL(request.url)
+    const q = (searchParams.get('q') || searchParams.get('search') || '').trim()
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10) || 1)
+    const limit = parseLimit(searchParams.get('limit'), DEFAULT_PAGE_LIMIT)
+    const skip = (page - 1) * limit
+
+    const filter: Record<string, unknown> = {}
+    if (q) {
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      filter.$or = [
+        { email: { $regex: escaped, $options: 'i' } },
+        { name: { $regex: escaped, $options: 'i' } },
+      ]
     }
 
-    const [users, familiesCount, postsCount, eventsCount, photosCount] = await Promise.all([
-      User.find({})
-        .select('_id name email avatar provider role createdAt')
-        .sort({ createdAt: -1 })
-        .lean(),
-      Family.countDocuments({}),
-      Post.countDocuments({}),
-      Event.countDocuments({}),
-      Photo.countDocuments({}),
-    ])
+    const [users, total, familiesCount, postsCount, eventsCount, photosCount, adminsCount] =
+      await Promise.all([
+        User.find(filter)
+          .select('_id name email avatar provider role createdAt')
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        User.countDocuments(filter),
+        Family.countDocuments({}),
+        Post.countDocuments({}),
+        Event.countDocuments({}),
+        Photo.countDocuments({}),
+        User.countDocuments({ role: 'admin' }),
+      ])
 
     const formattedUsers = users.map((user) => ({
       id: user._id.toString(),
@@ -60,95 +61,105 @@ export async function GET() {
       avatar: user.avatar || null,
       provider: user.provider,
       role: user.role || getDefaultRoleForEmail(user.email),
-      created_at: user.createdAt,
+      createdAt: user.createdAt,
     }))
-
-    const adminsCount = formattedUsers.filter((user) => user.role === 'admin').length
 
     return NextResponse.json({
       stats: {
-        users_count: formattedUsers.length,
-        admins_count: adminsCount,
-        families_count: familiesCount,
-        posts_count: postsCount,
-        events_count: eventsCount,
-        photos_count: photosCount,
+        usersCount: total,
+        adminsCount,
+        familiesCount,
+        postsCount,
+        eventsCount,
+        photosCount,
       },
       users: formattedUsers,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
     })
   } catch (error) {
+    if (error instanceof AuthError) {
+      const { error: message, status } = authErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
     console.error('Error getting admin users:', error)
-    return NextResponse.json({ error: 'Khong the tai danh sach user' }, { status: 500 })
+    return NextResponse.json({ error: 'Không thể tải danh sách user' }, { status: 500 })
   }
 }
 
 export async function PATCH(request: NextRequest) {
   try {
-    const auth = await requireSystemAdmin()
-    if ('error' in auth) {
-      return auth.error
-    }
+    const admin = await requireSystemAdmin()
+    await connectDB()
 
     const { userId, role } = await request.json()
     if (!userId || !isUserRole(role)) {
       return NextResponse.json(
-        { error: 'Thieu userId hoac role khong hop le' },
+        { error: 'Thiếu userId hoặc role không hợp lệ' },
         { status: 400 }
       )
     }
 
-    if (auth.currentUser._id.toString() === userId && role !== 'admin') {
+    parseObjectId(userId, 'userId')
+
+    if (admin.id === userId && role !== 'admin') {
       return NextResponse.json(
-        { error: 'Khong the tu ha quyen admin cua chinh minh' },
+        { error: 'Không thể tự hạ quyền admin của chính mình' },
         { status: 400 }
       )
     }
 
     const targetUser = await User.findById(userId)
     if (!targetUser) {
-      return NextResponse.json({ error: 'Khong tim thay user' }, { status: 404 })
-    }
-
-    const currentRole = targetUser.role || getDefaultRoleForEmail(targetUser.email)
-    if (targetUser.role !== currentRole) {
-      targetUser.role = currentRole
-      await targetUser.save()
+      return NextResponse.json({ error: 'Không tìm thấy user' }, { status: 404 })
     }
 
     if (role === 'user' && isSystemAdminEmail(targetUser.email)) {
       return NextResponse.json(
-        { error: 'User nay duoc cau hinh admin trong SYSTEM_ADMIN_EMAILS' },
+        { error: 'User này được cấu hình admin trong SYSTEM_ADMIN_EMAILS' },
         { status: 400 }
       )
     }
 
-    if (currentRole === 'admin' && role === 'user') {
-      const adminsCount = await User.countDocuments({ role: 'admin' })
-      if (adminsCount <= 1) {
+    if (role === 'user') {
+      const adminCount = await User.countDocuments({ role: 'admin' })
+      if (targetUser.role === 'admin' && adminCount <= 1) {
         return NextResponse.json(
-          { error: 'He thong phai co it nhat 1 admin' },
+          { error: 'Hệ thống phải còn ít nhất một admin' },
           { status: 400 }
         )
       }
     }
 
+    const previousRole = targetUser.role
     targetUser.role = role
     await targetUser.save()
+
+    console.log('[audit] admin.role_change', {
+      actorId: admin.id,
+      targetUserId: userId,
+      from: previousRole,
+      to: role,
+      at: new Date().toISOString(),
+    })
 
     return NextResponse.json({
       success: true,
       user: {
         id: targetUser._id.toString(),
-        name: targetUser.name,
-        email: targetUser.email,
-        avatar: targetUser.avatar || null,
-        provider: targetUser.provider,
         role: targetUser.role,
-        created_at: targetUser.createdAt,
       },
     })
   } catch (error) {
+    if (error instanceof AuthError) {
+      const { error: message, status } = authErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
     console.error('Error updating user role:', error)
-    return NextResponse.json({ error: 'Khong the cap nhat quyen user' }, { status: 500 })
+    return NextResponse.json({ error: 'Không thể cập nhật role' }, { status: 500 })
   }
 }
