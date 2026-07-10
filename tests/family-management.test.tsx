@@ -85,10 +85,13 @@ describe('Family Management - Form Validation (Requirement 2.2)', () => {
 
     it('should trim whitespace from family name before submission', async () => {
       const mockResponse = {
-        id: 'family-123',
-        name: 'Test Family',
-        invite_code: 'ABC12345',
-        created_at: new Date().toISOString(),
+        success: true,
+        family: {
+          id: 'family-123',
+          name: 'Test Family',
+          invite_code: 'ABC12345',
+          created_at: new Date().toISOString(),
+        },
       }
 
       ;(global.fetch as any).mockResolvedValueOnce({
@@ -117,10 +120,13 @@ describe('Family Management - Form Validation (Requirement 2.2)', () => {
 
     it('should accept valid family name', async () => {
       const mockResponse = {
-        id: 'family-123',
-        name: 'Gia đình Nguyễn',
-        invite_code: 'ABC12345',
-        created_at: new Date().toISOString(),
+        success: true,
+        family: {
+          id: 'family-123',
+          name: 'Gia đình Nguyễn',
+          invite_code: 'ABC12345',
+          created_at: new Date().toISOString(),
+        },
       }
 
       ;(global.fetch as any).mockResolvedValueOnce({

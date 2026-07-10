@@ -55,10 +55,13 @@ describe('CreateFamilyForm', () => {
 
   it('should show invite card on successful submission', async () => {
     const mockResponse = {
-      id: 'test-id',
-      name: 'Test Family',
-      invite_code: 'ABC12345',
-      created_at: new Date().toISOString(),
+      success: true,
+      family: {
+        id: 'test-id',
+        name: 'Test Family',
+        invite_code: 'ABC12345',
+        created_at: new Date().toISOString(),
+      },
     }
 
     ;(global.fetch as any).mockResolvedValueOnce({
@@ -133,10 +136,13 @@ describe('CreateFamilyForm', () => {
 
   it('should trim whitespace from family name', async () => {
     const mockResponse = {
-      id: 'test-id',
-      name: 'Test Family',
-      invite_code: 'ABC12345',
-      created_at: new Date().toISOString(),
+      success: true,
+      family: {
+        id: 'test-id',
+        name: 'Test Family',
+        invite_code: 'ABC12345',
+        created_at: new Date().toISOString(),
+      },
     }
 
     ;(global.fetch as any).mockResolvedValueOnce({
@@ -165,10 +171,13 @@ describe('CreateFamilyForm', () => {
 
   it('should redirect to dashboard when clicking "Đi đến trang chủ" button', async () => {
     const mockResponse = {
-      id: 'test-id',
-      name: 'Test Family',
-      invite_code: 'ABC12345',
-      created_at: new Date().toISOString(),
+      success: true,
+      family: {
+        id: 'test-id',
+        name: 'Test Family',
+        invite_code: 'ABC12345',
+        created_at: new Date().toISOString(),
+      },
     }
 
     ;(global.fetch as any).mockResolvedValueOnce({

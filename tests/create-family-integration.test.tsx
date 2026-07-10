@@ -35,10 +35,13 @@ describe('Create Family Integration Test', () => {
 
   it('should complete full flow: render page, fill form, submit, show invite card, and redirect', async () => {
     const mockResponse = {
-      id: 'family-123',
-      name: 'Gia đình Nguyễn',
-      invite_code: 'ABC12345',
-      created_at: new Date().toISOString(),
+      success: true,
+      family: {
+        id: 'family-123',
+        name: 'Gia đình Nguyễn',
+        invite_code: 'ABC12345',
+        created_at: new Date().toISOString(),
+      },
     }
 
     ;(global.fetch as any).mockResolvedValueOnce({

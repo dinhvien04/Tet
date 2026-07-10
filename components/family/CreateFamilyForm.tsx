@@ -43,8 +43,18 @@ export function CreateFamilyForm() {
       }
 
       const data = await response.json()
-      toast.success(`Tao nha "${name.trim()}" thanh cong!`)
-      setCreatedFamily(data.family)
+
+      // API returns { success, family: { id, name, invite_code, ... } }
+      if (!data.family?.id || !data.family?.invite_code) {
+        throw new Error('Phan hoi khong hop le tu may chu')
+      }
+
+      toast.success(`Tao nha "${data.family.name}" thanh cong!`)
+      setCreatedFamily({
+        id: data.family.id,
+        name: data.family.name,
+        invite_code: data.family.invite_code,
+      })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Co loi xay ra'
       setError(message)
