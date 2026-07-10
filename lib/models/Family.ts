@@ -5,6 +5,8 @@ export interface IFamily {
   name: string
   inviteCode: string
   createdBy: mongoose.Types.ObjectId
+  /** When true, join via invite creates a pending request for admin approval */
+  requireJoinApproval: boolean
   createdAt: Date
   updatedAt: Date
 }
@@ -26,6 +28,10 @@ const FamilySchema = new Schema<IFamily>(
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
+    },
+    requireJoinApproval: {
+      type: Boolean,
+      default: false,
     },
   },
   {

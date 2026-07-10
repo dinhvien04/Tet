@@ -29,6 +29,18 @@ export default function FamilyPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [copied, setCopied] = useState(false)
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
+  const [requireJoinApproval, setRequireJoinApproval] = useState(false)
+  const [joinRequests, setJoinRequests] = useState<
+    Array<{
+      id: string
+      message: string | null
+      createdAt: string
+      user: { id: string; name: string; email: string; avatar: string | null }
+    }>
+  >([])
+
+  const myMembership = members.find((member) => member.user_id === user?.id)
+  const isCurrentUserAdmin = myMembership?.role === 'admin'
 
   const fetchMembers = useCallback(async () => {
     if (!currentFamily?.id) return
@@ -47,11 +59,37 @@ export default function FamilyPage() {
     }
   }, [currentFamily?.id])
 
+  const fetchJoinAdminData = useCallback(async () => {
+    if (!currentFamily?.id) return
+    try {
+      const [settingsRes, reqRes] = await Promise.all([
+        fetch(`/api/families/${currentFamily.id}/settings`),
+        fetch(`/api/families/${currentFamily.id}/join-requests?status=pending`),
+      ])
+      if (settingsRes.ok) {
+        const s = await settingsRes.json()
+        setRequireJoinApproval(Boolean(s.settings?.requireJoinApproval))
+      }
+      if (reqRes.ok) {
+        const r = await reqRes.json()
+        setJoinRequests(r.requests || [])
+      }
+    } catch (e) {
+      console.error(e)
+    }
+  }, [currentFamily?.id])
+
   useEffect(() => {
     if (currentFamily?.id) {
       fetchMembers()
     }
   }, [currentFamily?.id, fetchMembers])
+
+  useEffect(() => {
+    if (isCurrentUserAdmin && currentFamily?.id) {
+      void fetchJoinAdminData()
+    }
+  }, [isCurrentUserAdmin, currentFamily?.id, fetchJoinAdminData])
 
   const copyInviteLink = () => {
     if (currentFamily?.invite_code) {
@@ -62,8 +100,40 @@ export default function FamilyPage() {
     }
   }
 
-  const myMembership = members.find((member) => member.user_id === user?.id)
-  const isCurrentUserAdmin = myMembership?.role === 'admin'
+  const reviewJoinRequest = async (requestId: string, action: 'approve' | 'reject') => {
+    if (!currentFamily?.id) return
+    try {
+      setActionLoadingId(requestId)
+      const res = await fetch(`/api/families/${currentFamily.id}/join-requests`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestId, action }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Không xử lý được')
+      await Promise.all([fetchMembers(), fetchJoinAdminData()])
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Lỗi')
+    } finally {
+      setActionLoadingId(null)
+    }
+  }
+
+  const toggleJoinApproval = async (value: boolean) => {
+    if (!currentFamily?.id) return
+    try {
+      const res = await fetch(`/api/families/${currentFamily.id}/settings`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requireJoinApproval: value }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setRequireJoinApproval(value)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Lỗi')
+    }
+  }
 
   const updateMemberRole = async (memberId: string, role: 'admin' | 'member') => {
     if (!currentFamily?.id) return
@@ -197,20 +267,73 @@ export default function FamilyPage() {
                 </div>
               )}
 
-              <div className="rounded-lg border bg-gray-50 p-3 text-sm text-gray-700">
+              <div className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
                 {isCurrentUserAdmin
-                  ? 'Ban dang la admin cua gia dinh. Ban co the cap quyen, ha quyen, va xoa thanh vien.'
-                  : 'Ban dang la thanh vien. Chi admin moi co the quan ly thanh vien.'}
+                  ? 'Bạn đang là admin. Có thể cấp quyền, xóa thành viên và duyệt yêu cầu tham gia.'
+                  : 'Bạn đang là thành viên. Chỉ admin mới quản lý được nhà.'}
               </div>
+
+              {isCurrentUserAdmin && (
+                <label className="flex items-center gap-3 text-sm">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4"
+                    checked={requireJoinApproval}
+                    onChange={(e) => void toggleJoinApproval(e.target.checked)}
+                  />
+                  Yêu cầu admin duyệt khi ai đó join bằng mã mời
+                </label>
+              )}
             </CardContent>
           </Card>
+
+          {isCurrentUserAdmin && joinRequests.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Yêu cầu tham gia ({joinRequests.length})</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {joinRequests.map((req) => (
+                  <div
+                    key={req.id}
+                    className="flex flex-col gap-2 rounded-lg border border-border p-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div>
+                      <p className="font-medium">{req.user.name}</p>
+                      <p className="text-sm text-muted-foreground">{req.user.email}</p>
+                      {req.message && (
+                        <p className="mt-1 text-xs text-muted-foreground">{req.message}</p>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        disabled={actionLoadingId === req.id}
+                        onClick={() => void reviewJoinRequest(req.id, 'approve')}
+                      >
+                        Duyệt
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={actionLoadingId === req.id}
+                        onClick={() => void reviewJoinRequest(req.id, 'reject')}
+                      >
+                        Từ chối
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 <span className="flex items-center gap-2">
                   <UserPlus className="w-5 h-5" />
-                  Thanh vien ({members.length})
+                  Thành viên ({members.length})
                 </span>
               </CardTitle>
             </CardHeader>

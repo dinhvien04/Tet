@@ -84,8 +84,10 @@ npm run deploy:check
 ## Tài liệu thêm
 
 - [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
+- [`docs/SECURITY.md`](./docs/SECURITY.md)
 - [`docs/MONGODB_INDEXES.md`](./docs/MONGODB_INDEXES.md)
 - [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md)
+- [`CHANGELOG.md`](./CHANGELOG.md)
 - [`fix.md`](./fix.md) — kế hoạch nâng cấp P0/P1/P2
 
 ## License
