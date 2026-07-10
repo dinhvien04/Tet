@@ -74,6 +74,8 @@ npm run deploy:check
 
 ## Production checklist
 
+Xem chi tiết: [`docs/PRODUCTION_CHECKLIST.md`](./docs/PRODUCTION_CHECKLIST.md)
+
 - [ ] `NEXTAUTH_SECRET` mạnh (≥32 ký tự), không placeholder
 - [ ] `CRON_SECRET` cấu hình; Vercel Cron gửi `Authorization: Bearer ...`
 - [ ] Cloudinary production (không ghi `public/uploads`)

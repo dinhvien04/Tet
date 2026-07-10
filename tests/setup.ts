@@ -1,26 +1,26 @@
-// Test setup file for Vitest
-import { beforeAll, afterAll, afterEach } from 'vitest'
+// Test setup for Vitest — MongoDB + NextAuth stack
+import { beforeAll, afterEach, afterAll } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 import { config } from 'dotenv'
 
-// Load environment variables from .env.local
 config({ path: '.env.local' })
 
-// Setup environment variables for testing
 beforeAll(() => {
-  // If still not set after loading .env.local, use defaults
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://localhost:54321'
+  if (!process.env.NEXTAUTH_SECRET) {
+    process.env.NEXTAUTH_SECRET = 'test-secret-at-least-32-characters-long!!'
   }
-  if (!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key'
+  if (!process.env.NEXTAUTH_URL) {
+    process.env.NEXTAUTH_URL = 'http://localhost:3000'
+  }
+  if (!process.env.MONGODB_URI) {
+    process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/tet-connect-test'
   }
 })
 
 afterEach(() => {
-  // Clean up after each test
+  // per-test cleanup hooks can go here
 })
 
 afterAll(() => {
-  // Final cleanup
+  // final cleanup
 })
