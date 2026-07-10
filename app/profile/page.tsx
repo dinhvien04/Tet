@@ -29,6 +29,8 @@ export default function ProfilePage() {
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState('')
+  const [eventReminders, setEventReminders] = useState(true)
+  const [taskReminders, setTaskReminders] = useState(true)
 
   useEffect(() => {
     ;(async () => {
@@ -39,6 +41,13 @@ export default function ProfilePage() {
         setUser(data.user)
         setName(data.user.name || '')
         setAvatar(data.user.avatar || '')
+
+        const prefRes = await fetch('/api/profile/preferences')
+        if (prefRes.ok) {
+          const pref = await prefRes.json()
+          setEventReminders(pref.preferences?.eventReminders ?? true)
+          setTaskReminders(pref.preferences?.taskReminders ?? true)
+        }
       } catch (e) {
         toast.error(e instanceof Error ? e.message : 'Lỗi tải hồ sơ')
       } finally {
@@ -168,6 +177,70 @@ export default function ProfilePage() {
                       {saving ? 'Đang lưu...' : 'Lưu hồ sơ'}
                     </Button>
                   </form>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Thông báo & dữ liệu</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <label className="flex items-center gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={eventReminders}
+                      onChange={(e) => setEventReminders(e.target.checked)}
+                      className="h-4 w-4"
+                    />
+                    Nhắc sự kiện sắp tới
+                  </label>
+                  <label className="flex items-center gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={taskReminders}
+                      onChange={(e) => setTaskReminders(e.target.checked)}
+                      className="h-4 w-4"
+                    />
+                    Nhắc công việc chưa xong
+                  </label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={saving}
+                    onClick={async () => {
+                      setSaving(true)
+                      try {
+                        const res = await fetch('/api/profile/preferences', {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ eventReminders, taskReminders }),
+                        })
+                        const data = await res.json()
+                        if (!res.ok) throw new Error(data.error)
+                        toast.success('Đã lưu tùy chọn thông báo')
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : 'Lỗi')
+                      } finally {
+                        setSaving(false)
+                      }
+                    }}
+                  >
+                    Lưu tùy chọn
+                  </Button>
+                  <div className="border-t border-border pt-4">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        window.location.href = '/api/profile/export'
+                      }}
+                    >
+                      Tải xuất dữ liệu (JSON)
+                    </Button>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Tải bài đăng, comment, ảnh, RSVP và thông tin cơ bản (không có mật khẩu).
+                    </p>
+                  </div>
                 </CardContent>
               </Card>
 

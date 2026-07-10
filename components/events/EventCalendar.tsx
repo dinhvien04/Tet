@@ -15,6 +15,9 @@ import {
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
 import { EmptyState } from '@/components/ui/empty-state'
+import { cn } from '@/lib/utils'
+
+type EventFilter = 'all' | 'upcoming' | 'past'
 
 interface EventCalendarProps {
   familyId: string
@@ -24,25 +27,29 @@ export function EventCalendar({ familyId }: EventCalendarProps) {
   const [events, setEvents] = useState<Event[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [filter, setFilter] = useState<EventFilter>('upcoming')
 
   const fetchEvents = useCallback(async () => {
     try {
-      const response = await fetch(`/api/events?familyId=${familyId}`)
-      
+      setIsLoading(true)
+      const response = await fetch(
+        `/api/events?familyId=${familyId}&filter=${filter}`
+      )
+
       if (!response.ok) {
         throw new Error('Không thể tải danh sách sự kiện')
       }
 
       const data = await response.json()
-      setEvents(data.events || []) // Fix: API returns { events: [...] }
+      setEvents(data.events || [])
     } catch (error) {
       console.error('Error fetching events:', error)
       toast.error('Không thể tải danh sách sự kiện')
-      setEvents([]) // Set empty array on error
+      setEvents([])
     } finally {
       setIsLoading(false)
     }
-  }, [familyId])
+  }, [familyId, filter])
 
   useEffect(() => {
     fetchEvents()
@@ -53,45 +60,64 @@ export function EventCalendar({ familyId }: EventCalendarProps) {
     fetchEvents()
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex justify-center items-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-2xl font-bold">Lịch sự kiện</h2>
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="w-4 h-4 mr-2" />
-              Tạo sự kiện
+        <div className="flex flex-wrap items-center gap-2">
+          {(
+            [
+              { id: 'upcoming', label: 'Sắp tới' },
+              { id: 'past', label: 'Đã qua' },
+              { id: 'all', label: 'Tất cả' },
+            ] as const
+          ).map((tab) => (
+            <Button
+              key={tab.id}
+              type="button"
+              size="sm"
+              variant={filter === tab.id ? 'default' : 'outline'}
+              onClick={() => setFilter(tab.id)}
+              className={cn(filter === tab.id && 'shadow-sm')}
+            >
+              {tab.label}
             </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Tạo sự kiện mới</DialogTitle>
-            </DialogHeader>
-            <CreateEventForm 
-              familyId={familyId} 
-              onEventCreated={handleEventCreated}
-            />
-          </DialogContent>
-        </Dialog>
+          ))}
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-2 h-4 w-4" />
+                Tạo sự kiện
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Tạo sự kiện mới</DialogTitle>
+              </DialogHeader>
+              <CreateEventForm familyId={familyId} onEventCreated={handleEventCreated} />
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
-      {events.length === 0 ? (
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-primary" />
+        </div>
+      ) : events.length === 0 ? (
         <EmptyState
           icon={Calendar}
-          title="Chưa có sự kiện nào"
+          title={
+            filter === 'upcoming'
+              ? 'Chưa có sự kiện sắp tới'
+              : filter === 'past'
+                ? 'Chưa có sự kiện đã qua'
+                : 'Chưa có sự kiện nào'
+          }
           description="Tạo sự kiện đầu tiên cho gia đình bạn!"
           action={{
             label: 'Tạo sự kiện',
-            onClick: () => setIsDialogOpen(true)
+            onClick: () => setIsDialogOpen(true),
           }}
         />
       ) : (

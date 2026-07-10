@@ -89,6 +89,8 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url)
     const familyId = searchParams.get('familyId')
+    // filter: all | upcoming | past
+    const filter = (searchParams.get('filter') || 'all').toLowerCase()
     if (!familyId) {
       return NextResponse.json({ error: 'Thieu familyId' }, { status: 400 })
     }
@@ -106,9 +108,17 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const events = await Event.find({ familyId })
+    const now = new Date()
+    const query: Record<string, unknown> = { familyId }
+    if (filter === 'upcoming') {
+      query.date = { $gte: now }
+    } else if (filter === 'past') {
+      query.date = { $lt: now }
+    }
+
+    const events = await Event.find(query)
       .populate('createdBy', 'name email avatar')
-      .sort({ date: 1 })
+      .sort({ date: filter === 'past' ? -1 : 1 })
       .lean()
 
     const formattedEvents = events.map((eventDoc) => {

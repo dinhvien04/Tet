@@ -25,7 +25,20 @@ export function NotificationBell({ userId }: NotificationBellProps) {
       }
 
       const data = await response.json()
-      setNotifications(data || [])
+      // Support both array legacy and { notifications } shape
+      const list = Array.isArray(data) ? data : data.notifications || []
+      setNotifications(
+        list.map((n: Record<string, unknown>) => ({
+          id: n.id as string,
+          user_id: (n.userId || n.user_id) as string,
+          type: n.type as Notification['type'],
+          title: n.title as string,
+          content: n.content as string,
+          link: (n.link as string) || undefined,
+          read: Boolean(n.read),
+          created_at: (n.createdAt || n.created_at) as string,
+        }))
+      )
     } catch (error) {
       console.error('Error fetching notifications:', error)
     } finally {
@@ -36,8 +49,10 @@ export function NotificationBell({ userId }: NotificationBellProps) {
   useEffect(() => {
     fetchNotifications()
 
-    // Poll for new notifications every 30 seconds
-    const interval = setInterval(fetchNotifications, 30000)
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      fetchNotifications()
+    }, 30000)
 
     return () => {
       clearInterval(interval)
@@ -60,15 +75,27 @@ export function NotificationBell({ userId }: NotificationBellProps) {
         throw new Error('Failed to mark notification as read')
       }
 
-      // Remove from local state
       setNotifications((prev) => prev.filter((n) => n.id !== notificationId))
 
-      // Navigate to the link if provided
-      if (link) {
+      if (link && link.startsWith('/')) {
         window.location.href = link
       }
     } catch (error) {
       console.error('Error marking notification as read:', error)
+    }
+  }
+
+  const handleMarkAll = async () => {
+    try {
+      const response = await fetch('/api/notifications', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ markAll: true }),
+      })
+      if (!response.ok) throw new Error('mark all failed')
+      setNotifications([])
+    } catch (error) {
+      console.error('Error marking all read:', error)
     }
   }
 
@@ -93,6 +120,7 @@ export function NotificationBell({ userId }: NotificationBellProps) {
           notifications={notifications}
           onClose={() => setIsOpen(false)}
           onMarkAsRead={handleMarkAsRead}
+          onMarkAll={handleMarkAll}
           loading={loading}
         />
       )}

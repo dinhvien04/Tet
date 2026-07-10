@@ -3,6 +3,7 @@ import Event from '@/lib/models/Event'
 import EventTask from '@/lib/models/EventTask'
 import FamilyMember from '@/lib/models/FamilyMember'
 import Notification from '@/lib/models/Notification'
+import User from '@/lib/models/User'
 
 const TIMEZONE = 'Asia/Ho_Chi_Minh'
 
@@ -84,6 +85,30 @@ export async function checkAndCreateNotifications() {
     createdAt: Date
   }> = []
 
+  // Respect per-user notification preferences
+  const allUserIds = new Set<string>()
+  for (const list of membersByFamily.values()) {
+    for (const m of list) allUserIds.add(m.userId.toString())
+  }
+  for (const tasks of tasksByEvent.values()) {
+    for (const t of tasks) allUserIds.add(t.assignedTo.toString())
+  }
+
+  const users = await User.find({ _id: { $in: [...allUserIds] } })
+    .select('_id notificationPreferences')
+    .lean()
+
+  const prefsByUser = new Map<
+    string,
+    { eventReminders: boolean; taskReminders: boolean }
+  >()
+  for (const u of users) {
+    prefsByUser.set(u._id.toString(), {
+      eventReminders: u.notificationPreferences?.eventReminders ?? true,
+      taskReminders: u.notificationPreferences?.taskReminders ?? true,
+    })
+  }
+
   for (const event of upcomingEvents) {
     const familyKey = event.familyId.toString()
     const members = membersByFamily.get(familyKey) || []
@@ -91,6 +116,13 @@ export async function checkAndCreateNotifications() {
     const when = formatVietnamDate(new Date(event.date))
 
     for (const member of members) {
+      const uid = member.userId.toString()
+      const prefs = prefsByUser.get(uid) || {
+        eventReminders: true,
+        taskReminders: true,
+      }
+      if (!prefs.eventReminders) continue
+
       docs.push({
         userId: member.userId,
         type: 'event_reminder',
@@ -105,6 +137,13 @@ export async function checkAndCreateNotifications() {
 
     const tasks = tasksByEvent.get(event._id.toString()) || []
     for (const task of tasks) {
+      const uid = task.assignedTo.toString()
+      const prefs = prefsByUser.get(uid) || {
+        eventReminders: true,
+        taskReminders: true,
+      }
+      if (!prefs.taskReminders) continue
+
       docs.push({
         userId: task.assignedTo,
         type: 'task_reminder',

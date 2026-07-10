@@ -14,6 +14,7 @@ interface NotificationDropdownProps {
   notifications: Notification[]
   onClose: () => void
   onMarkAsRead: (notificationId: string, link?: string) => void
+  onMarkAll?: () => void
   loading?: boolean
 }
 
@@ -26,6 +27,7 @@ export function NotificationDropdown({
   notifications,
   onClose,
   onMarkAsRead,
+  onMarkAll,
   loading = false
 }: NotificationDropdownProps) {
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -54,16 +56,28 @@ export function NotificationDropdown({
       className="absolute right-0 top-full mt-2 w-80 md:w-96 z-50"
     >
       <Card className="shadow-lg">
-        <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
           <CardTitle className="text-lg">Thông báo</CardTitle>
-          <Button
-            variant="ghost"
-            onClick={onClose}
-            className="h-8 w-8 p-0"
-            aria-label="Close notifications"
-          >
-            <X className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-1">
+            {onMarkAll && notifications.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onMarkAll}
+                className="text-xs"
+              >
+                Đọc tất cả
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              onClick={onClose}
+              className="h-8 w-8 p-0"
+              aria-label="Đóng thông báo"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="max-h-[400px] overflow-y-auto">
           {loading ? (
