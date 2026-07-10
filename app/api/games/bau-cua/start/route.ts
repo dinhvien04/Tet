@@ -35,8 +35,14 @@ export async function POST(request: NextRequest) {
     try {
       const result = await withMongoTransaction(async (session) => {
         const q = <T>(query: T): T => {
-          if (session && query && typeof (query as { session?: unknown }).session === 'function') {
-            return (query as { session: (s: typeof session) => T }).session(session)
+          if (
+            session &&
+            query &&
+            typeof (query as unknown as { session?: unknown }).session === 'function'
+          ) {
+            return (query as unknown as { session: (s: typeof session) => T }).session(
+              session
+            )
           }
           return query
         }

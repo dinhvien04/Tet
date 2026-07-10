@@ -48,3 +48,24 @@ export function unregisterServiceWorker() {
 export function clearServiceWorkerCache() {
   void purgeServiceWorkersAndCaches()
 }
+
+/**
+ * Subscribe to browser online/offline events.
+ * Returns cleanup function.
+ */
+export function onNetworkChange(callback: (online: boolean) => void): () => void {
+  if (typeof window === 'undefined') {
+    return () => undefined
+  }
+
+  const handleOnline = () => callback(true)
+  const handleOffline = () => callback(false)
+
+  window.addEventListener('online', handleOnline)
+  window.addEventListener('offline', handleOffline)
+
+  return () => {
+    window.removeEventListener('online', handleOnline)
+    window.removeEventListener('offline', handleOffline)
+  }
+}

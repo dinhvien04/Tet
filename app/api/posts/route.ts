@@ -1,99 +1,100 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
 import { connectDB } from '@/lib/mongodb'
 import Post from '@/lib/models/Post'
-import FamilyMember from '@/lib/models/FamilyMember'
 import Reaction from '@/lib/models/Reaction'
 import Comment from '@/lib/models/Comment'
+import {
+  AuthError,
+  authErrorResponse,
+  requireFamilyMember,
+  requireUser,
+} from '@/lib/authorization'
+import {
+  parseJsonBody,
+  pickFamilyId,
+  requireEnum,
+  requireObjectIdString,
+  requireString,
+  ValidationError,
+  validationErrorResponse,
+} from '@/lib/api/validate'
+import mongoose from 'mongoose'
+
+const POST_TYPES = ['cau-doi', 'loi-chuc', 'thiep-tet'] as const
+const MAX_CONTENT = 5_000
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
-    }
+    const body = await parseJsonBody(request)
+    const familyId = pickFamilyId(body)
+    const content = requireString(body.content, 'content', { max: MAX_CONTENT })
+    const type = requireEnum(body.type, 'type', POST_TYPES)
 
-    const body = await request.json()
-    const familyId = body.familyId || body.family_id
-    const content = body.content
-    const type = body.type
-
-    if (!familyId || !content || !type) {
-      return NextResponse.json({ error: 'Thieu thong tin bat buoc' }, { status: 400 })
-    }
-
-    if (!['cau-doi', 'loi-chuc', 'thiep-tet'].includes(type)) {
-      return NextResponse.json({ error: 'Loai bai dang khong hop le' }, { status: 400 })
-    }
-
-    await connectDB()
-
-    const membership = await FamilyMember.findOne({
-      familyId,
-      userId: session.user.id,
-    })
-    if (!membership) {
-      return NextResponse.json(
-        { error: 'Ban khong phai thanh vien cua nha nay' },
-        { status: 403 }
-      )
-    }
+    const { user, familyId: familyObjectId } = await requireFamilyMember(familyId)
 
     const post = await Post.create({
-      familyId,
-      userId: session.user.id,
-      content: content.trim(),
+      familyId: familyObjectId,
+      userId: user.id,
+      content,
       type,
     })
     await post.populate('userId', 'name email avatar')
 
-    const user = post.userId as unknown as {
+    const author = post.userId as unknown as {
       _id: { toString(): string }
       name: string
       email: string
       avatar?: string
     }
 
+    // camelCase primary; snake_case kept for legacy client types during migration
     return NextResponse.json({
       success: true,
       post: {
         id: post._id.toString(),
-        family_id: post.familyId.toString(),
-        user_id: user._id.toString(),
+        familyId: post.familyId.toString(),
+        userId: author._id.toString(),
         content: post.content,
         type: post.type,
+        createdAt: post.createdAt,
+        family_id: post.familyId.toString(),
+        user_id: author._id.toString(),
         created_at: post.createdAt,
-        reactions: {
-          heart: 0,
-          haha: 0,
-        },
+        reactions: { heart: 0, haha: 0 },
         userReaction: null,
         commentsCount: 0,
         users: {
-          id: user._id.toString(),
-          name: user.name,
-          email: user.email,
-          avatar: user.avatar ?? null,
+          id: author._id.toString(),
+          name: author.name,
+          email: author.email,
+          avatar: author.avatar ?? null,
         },
       },
     })
   } catch (error) {
+    if (error instanceof AuthError) {
+      const { error: message, status } = authErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
+    if (error instanceof ValidationError || error instanceof SyntaxError) {
+      const { error: message, status } = validationErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
     console.error('Error creating post:', error)
-    return NextResponse.json({ error: 'Khong the tao bai dang' }, { status: 500 })
+    return NextResponse.json({ error: 'Không thể tạo bài đăng' }, { status: 500 })
   }
 }
 
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
-    }
-
+    const user = await requireUser()
     const { searchParams } = new URL(request.url)
-    const familyId = searchParams.get('familyId')
-    // Prefer cursor pagination; keep from/to for backward compatibility
+    const familyIdRaw = searchParams.get('familyId')
+    if (!familyIdRaw) {
+      return NextResponse.json({ error: 'Thiếu familyId' }, { status: 400 })
+    }
+    const familyId = requireObjectIdString(familyIdRaw, 'familyId')
+
     const { parseLimit, decodeCursor, cursorFilter, buildNextCursor } = await import(
       '@/lib/api/pagination'
     )
@@ -101,25 +102,11 @@ export async function GET(request: NextRequest) {
     const cursor = decodeCursor(searchParams.get('cursor'))
     const from = Math.max(0, parseInt(searchParams.get('from') || '0', 10) || 0)
 
-    if (!familyId) {
-      return NextResponse.json({ error: 'Thieu familyId' }, { status: 400 })
-    }
-
+    const { familyId: familyObjectId } = await requireFamilyMember(familyId)
     await connectDB()
 
-    const membership = await FamilyMember.findOne({
-      familyId,
-      userId: session.user.id,
-    })
-    if (!membership) {
-      return NextResponse.json(
-        { error: 'Ban khong phai thanh vien cua nha nay' },
-        { status: 403 }
-      )
-    }
-
     const filter = {
-      familyId,
+      familyId: familyObjectId,
       ...cursorFilter(cursor, 'createdAt'),
     }
 
@@ -128,68 +115,98 @@ export async function GET(request: NextRequest) {
       .sort({ createdAt: -1, _id: -1 })
       .limit(limit)
 
-    // Legacy offset only when no cursor provided
     if (!cursor && from > 0) {
       query = query.skip(Math.min(from, 500))
     }
 
     const posts = await query.lean()
-    const nextCursor = buildNextCursor(posts as Array<{ createdAt: Date; _id: { toString(): string } }>, limit)
+    const nextCursor = buildNextCursor(
+      posts as Array<{ createdAt: Date; _id: { toString(): string } }>,
+      limit
+    )
 
-    const postIds = posts.map((postDoc) => postDoc._id.toString())
+    const postObjectIds = posts.map((p) => p._id as mongoose.Types.ObjectId)
 
-    const [reactions, comments] = await Promise.all([
-      postIds.length > 0
-        ? Reaction.find({ postId: { $in: postIds } }).select('postId userId type').lean()
+    // Aggregation counts — avoid loading every comment/reaction document
+    const [reactionAgg, commentAgg, userReactions] = await Promise.all([
+      postObjectIds.length > 0
+        ? Reaction.aggregate<{
+            _id: { postId: mongoose.Types.ObjectId; type: 'heart' | 'haha' }
+            count: number
+          }>([
+            { $match: { postId: { $in: postObjectIds } } },
+            {
+              $group: {
+                _id: { postId: '$postId', type: '$type' },
+                count: { $sum: 1 },
+              },
+            },
+          ])
         : Promise.resolve([]),
-      postIds.length > 0
-        ? Comment.find({ postId: { $in: postIds } }).select('postId').lean()
+      postObjectIds.length > 0
+        ? Comment.aggregate<{ _id: mongoose.Types.ObjectId; count: number }>([
+            { $match: { postId: { $in: postObjectIds } } },
+            { $group: { _id: '$postId', count: { $sum: 1 } } },
+          ])
+        : Promise.resolve([]),
+      postObjectIds.length > 0
+        ? Reaction.find({
+            postId: { $in: postObjectIds },
+            userId: user.id,
+          })
+            .select('postId type')
+            .lean()
         : Promise.resolve([]),
     ])
 
     const reactionCountMap = new Map<string, { heart: number; haha: number }>()
-    const userReactionMap = new Map<string, 'heart' | 'haha'>()
-
-    reactions.forEach((reaction) => {
-      const postId = reaction.postId.toString()
+    for (const row of reactionAgg) {
+      const postId = row._id.postId.toString()
       const counts = reactionCountMap.get(postId) || { heart: 0, haha: 0 }
-      counts[reaction.type] += 1
+      counts[row._id.type] = row.count
       reactionCountMap.set(postId, counts)
+    }
 
-      if (reaction.userId.toString() === session.user.id) {
-        userReactionMap.set(postId, reaction.type)
-      }
-    })
+    const userReactionMap = new Map<string, 'heart' | 'haha'>()
+    for (const reaction of userReactions) {
+      userReactionMap.set(reaction.postId.toString(), reaction.type)
+    }
 
     const commentsCountMap = new Map<string, number>()
-    comments.forEach((comment) => {
-      const postId = comment.postId.toString()
-      commentsCountMap.set(postId, (commentsCountMap.get(postId) || 0) + 1)
-    })
+    for (const row of commentAgg) {
+      commentsCountMap.set(row._id.toString(), row.count)
+    }
 
     const formattedPosts = posts.map((postDoc) => {
-      const user = postDoc.userId as unknown as {
+      const author = postDoc.userId as unknown as {
         _id: { toString(): string }
         name: string
         email: string
         avatar?: string
       }
+      const id = postDoc._id.toString()
+      const familyIdStr = postDoc.familyId.toString()
+      const userIdStr = author._id.toString()
 
       return {
-        id: postDoc._id.toString(),
-        family_id: postDoc.familyId.toString(),
-        user_id: user._id.toString(),
+        id,
+        familyId: familyIdStr,
+        userId: userIdStr,
         content: postDoc.content,
         type: postDoc.type,
+        createdAt: postDoc.createdAt,
+        // legacy aliases
+        family_id: familyIdStr,
+        user_id: userIdStr,
         created_at: postDoc.createdAt,
-        reactions: reactionCountMap.get(postDoc._id.toString()) || { heart: 0, haha: 0 },
-        userReaction: userReactionMap.get(postDoc._id.toString()) || null,
-        commentsCount: commentsCountMap.get(postDoc._id.toString()) || 0,
+        reactions: reactionCountMap.get(id) || { heart: 0, haha: 0 },
+        userReaction: userReactionMap.get(id) || null,
+        commentsCount: commentsCountMap.get(id) || 0,
         users: {
-          id: user._id.toString(),
-          name: user.name,
-          email: user.email,
-          avatar: user.avatar ?? null,
+          id: userIdStr,
+          name: author.name,
+          email: author.email,
+          avatar: author.avatar ?? null,
         },
       }
     })
@@ -200,7 +217,15 @@ export async function GET(request: NextRequest) {
       limit,
     })
   } catch (error) {
+    if (error instanceof AuthError) {
+      const { error: message, status } = authErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
+    if (error instanceof ValidationError) {
+      const { error: message, status } = validationErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
     console.error('Error fetching posts:', error)
-    return NextResponse.json({ error: 'Khong the lay danh sach bai dang' }, { status: 500 })
+    return NextResponse.json({ error: 'Không thể lấy danh sách bài đăng' }, { status: 500 })
   }
 }

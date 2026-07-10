@@ -6,10 +6,18 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+
+    env:
+      NEXTAUTH_SECRET: ci-test-secret-at-least-32-characters-long
+      NEXTAUTH_URL: http://localhost:3000
+      MONGODB_URI: mongodb://127.0.0.1:27017/tet-connect-ci?replicaSet=rs0&directConnection=true
 
     steps:
       - name: Checkout
@@ -24,25 +32,40 @@ jobs:
       - name: Install
         run: npm ci --legacy-peer-deps
 
+      - name: Start MongoDB single-node replica set
+        run: |
+          docker run -d --name mongo-rs -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
+          for i in $(seq 1 40); do
+            if docker exec mongo-rs mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' 2>/dev/null | grep -q 1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec mongo-rs mongosh --quiet --eval 'try { rs.status() } catch(e) { rs.initiate({_id:"rs0", members:[{_id:0, host:"127.0.0.1:27017"}]}) }'
+          # Wait until primary
+          for i in $(seq 1 40); do
+            STATE=$(docker exec mongo-rs mongosh --quiet --eval 'try { rs.status().myState } catch(e) { 0 }' 2>/dev/null || echo 0)
+            if [ "$STATE" = "1" ]; then
+              echo "Replica set PRIMARY ready"
+              break
+            fi
+            sleep 1
+          done
+
       - name: Lint
         run: npm run lint
 
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit tests (security + P1 core)
+      - name: Security + unit tests
         run: npm run test:ci
         env:
-          # Avoid import-time hard failures; unit tests mock DB where needed
-          NEXTAUTH_SECRET: ci-test-secret-at-least-32-characters-long
-          MONGODB_URI: mongodb://127.0.0.1:27017/tet-connect-ci
+          # Most unit tests mock DB; real URI available for modules that connect
+          MONGODB_URI: mongodb://127.0.0.1:27017/tet-connect-ci?replicaSet=rs0&directConnection=true
 
       - name: Build
         run: npm run build
-        env:
-          NEXTAUTH_SECRET: ci-test-secret-at-least-32-characters-long
-          NEXTAUTH_URL: http://localhost:3000
-          MONGODB_URI: mongodb://127.0.0.1:27017/tet-connect-ci
 
       - name: Dependency audit (high+)
         run: npm audit --audit-level=high || true

@@ -68,3 +68,29 @@ export async function checkDailyQuota(options: {
     windowMs: dayMs,
   })
 }
+
+/**
+ * Release one reserved unit from the current fixed window (best-effort).
+ * Used when quota was reserved before work that later failed.
+ */
+export async function releaseRateLimit(options: {
+  key: string
+  windowMs: number
+}): Promise<void> {
+  const { key: baseKey, windowMs } = options
+  await connectDB()
+
+  const now = Date.now()
+  const windowStartMs = now - (now % windowMs)
+  const bucketKey = `${baseKey}:${windowStartMs}`
+
+  await RateLimit.findOneAndUpdate(
+    { key: bucketKey, count: { $gt: 0 } },
+    { $inc: { count: -1 } }
+  )
+}
+
+export async function releaseDailyQuota(options: { key: string }): Promise<void> {
+  const dayMs = 24 * 60 * 60 * 1000
+  await releaseRateLimit({ key: options.key, windowMs: dayMs })
+}

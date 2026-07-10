@@ -10,10 +10,16 @@ import {
   authErrorResponse,
   requireFamilyMember,
 } from '@/lib/authorization'
+import {
+  detectMimeFromMagic,
+  ImageProcessError,
+  MAX_UPLOAD_BYTES,
+  processUploadImage,
+  type SafeImageMime,
+} from '@/lib/image-process'
+import { checkDailyQuota, releaseDailyQuota } from '@/lib/rate-limit'
 
 const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic'])
-const MAX_SIZE = 10 * 1024 * 1024
-const MAX_PIXELS = 40_000_000
 const DAILY_UPLOAD_LIMIT = 50
 
 function isProduction() {
@@ -33,51 +39,20 @@ function isCloudinaryConfigured() {
   )
 }
 
-function detectMimeFromMagic(buffer: Buffer): string | null {
-  if (buffer.length < 12) return null
-
-  // JPEG
-  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-    return 'image/jpeg'
-  }
-  // PNG
-  if (
-    buffer[0] === 0x89 &&
-    buffer[1] === 0x50 &&
-    buffer[2] === 0x4e &&
-    buffer[3] === 0x47
-  ) {
-    return 'image/png'
-  }
-  // WEBP: RIFF....WEBP
-  if (
-    buffer.toString('ascii', 0, 4) === 'RIFF' &&
-    buffer.toString('ascii', 8, 12) === 'WEBP'
-  ) {
-    return 'image/webp'
-  }
-  // HEIC/HEIF ftyp
-  if (buffer.toString('ascii', 4, 8) === 'ftyp') {
-    const brand = buffer.toString('ascii', 8, 12)
-    if (['heic', 'heif', 'mif1', 'msf1'].some((b) => brand.includes(b) || brand.startsWith(b.slice(0, 3)))) {
-      return 'image/heic'
-    }
-  }
-
-  return null
-}
-
-function getExtension(mime: string): string {
-  const map: Record<string, string> = {
+function getExtension(mime: SafeImageMime): string {
+  const map: Record<SafeImageMime, string> = {
     'image/jpeg': 'jpg',
     'image/png': 'png',
     'image/webp': 'webp',
-    'image/heic': 'heic',
   }
-  return map[mime] || 'bin'
+  return map[mime] || 'jpg'
 }
 
-async function uploadToLocalStorage(buffer: Buffer, familyId: string, mime: string) {
+async function uploadToLocalStorage(
+  buffer: Buffer,
+  familyId: string,
+  mime: SafeImageMime
+) {
   const extension = getExtension(mime)
   const safeFamilyId = familyId.replace(/[^a-zA-Z0-9_-]/g, '')
   const fileName = `${Date.now()}-${randomUUID()}.${extension}`
@@ -104,7 +79,7 @@ async function uploadToCloudinary(buffer: Buffer, familyId: string) {
         {
           folder: `tet-connect/${familyId}`,
           resource_type: 'image',
-          // Strip metadata / re-encode
+          // Already stripped/re-encoded by sharp; keep auto quality on CDN
           transformation: [{ quality: 'auto', fetch_format: 'auto' }],
         },
         (error, result) => {
@@ -131,6 +106,8 @@ async function destroyCloudinary(publicId: string) {
 export async function POST(request: NextRequest) {
   let uploadedPublicId: string | null = null
   let localPath: string | null = null
+  let quotaKey: string | null = null
+  let quotaReserved = false
 
   try {
     const formData = await request.formData()
@@ -151,7 +128,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Định dạng file không được phép' }, { status: 400 })
     }
 
-    if (file.size > MAX_SIZE) {
+    if (file.size > MAX_UPLOAD_BYTES) {
       return NextResponse.json(
         { error: 'File quá lớn. Kích thước tối đa 10MB.' },
         { status: 400 }
@@ -161,22 +138,35 @@ export async function POST(request: NextRequest) {
     const { user, familyId } = await requireFamilyMember(familyIdRaw)
     await connectDB()
 
-    // Simple daily quota via photo count
-    const startOfDay = new Date()
-    startOfDay.setHours(0, 0, 0, 0)
-    const todayCount = await Photo.countDocuments({
-      userId: user.id,
-      uploadedAt: { $gte: startOfDay },
+    // Atomic daily quota reservation (release on failure below)
+    quotaKey = `upload:user:${user.id}`
+    const quota = await checkDailyQuota({
+      key: quotaKey,
+      limit: DAILY_UPLOAD_LIMIT,
     })
-    if (todayCount >= DAILY_UPLOAD_LIMIT) {
+    if (!quota.allowed) {
       return NextResponse.json(
-        { error: 'Bạn đã đạt giới hạn upload trong ngày' },
-        { status: 429 }
+        {
+          error: 'Bạn đã đạt giới hạn upload trong ngày',
+          retryAfterSeconds: quota.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(quota.retryAfterSeconds) },
+        }
       )
     }
+    quotaReserved = true
 
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
+
+    if (buffer.length > MAX_UPLOAD_BYTES) {
+      return NextResponse.json(
+        { error: 'File quá lớn. Kích thước tối đa 10MB.' },
+        { status: 400 }
+      )
+    }
 
     const magicMime = detectMimeFromMagic(buffer)
     if (!magicMime || !ALLOWED_MIMES.has(magicMime)) {
@@ -191,7 +181,7 @@ export async function POST(request: NextRequest) {
       file.type &&
       ALLOWED_MIMES.has(file.type) &&
       file.type !== magicMime &&
-      !(magicMime === 'image/heic')
+      magicMime !== 'image/heic'
     ) {
       return NextResponse.json(
         { error: 'MIME type không khớp nội dung file' },
@@ -199,15 +189,13 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Rough pixel limit via file size heuristic when dimensions unavailable
-    if (buffer.length > MAX_PIXELS) {
-      return NextResponse.json({ error: 'Ảnh vượt giới hạn kích thước' }, { status: 400 })
-    }
+    // Real pixel check + strip EXIF via re-encode
+    const processed = await processUploadImage(buffer, magicMime)
 
     let uploadResult: { secure_url: string; public_id: string }
 
     if (isCloudinaryConfigured()) {
-      uploadResult = await uploadToCloudinary(buffer, familyId.toString())
+      uploadResult = await uploadToCloudinary(processed.buffer, familyId.toString())
       uploadedPublicId = uploadResult.public_id
     } else if (isProduction()) {
       return NextResponse.json(
@@ -215,8 +203,11 @@ export async function POST(request: NextRequest) {
         { status: 503 }
       )
     } else {
-      // Local dev fallback only
-      const local = await uploadToLocalStorage(buffer, familyId.toString(), magicMime)
+      const local = await uploadToLocalStorage(
+        processed.buffer,
+        familyId.toString(),
+        processed.mime
+      )
       uploadResult = { secure_url: local.secure_url, public_id: local.public_id }
       localPath = local.localPath
     }
@@ -237,6 +228,9 @@ export async function POST(request: NextRequest) {
         avatar?: string | null
       }
 
+      // Success — keep quota reservation
+      quotaReserved = false
+
       return NextResponse.json({
         success: true,
         photo: {
@@ -245,6 +239,8 @@ export async function POST(request: NextRequest) {
           userId: populatedUser._id.toString(),
           url: photo.url,
           uploadedAt: photo.uploadedAt,
+          width: processed.width,
+          height: processed.height,
           uploader: {
             id: populatedUser._id.toString(),
             name: populatedUser.name,
@@ -254,7 +250,6 @@ export async function POST(request: NextRequest) {
         },
       })
     } catch (dbError) {
-      // Rollback storage if DB save fails
       if (uploadedPublicId && !uploadedPublicId.startsWith('local:')) {
         await destroyCloudinary(uploadedPublicId)
       }
@@ -272,7 +267,18 @@ export async function POST(request: NextRequest) {
       const { error: message, status } = authErrorResponse(error)
       return NextResponse.json({ error: message }, { status })
     }
+    if (error instanceof ImageProcessError) {
+      return NextResponse.json({ error: error.message }, { status: error.status })
+    }
     console.error('Error uploading photo:', error)
     return NextResponse.json({ error: 'Không thể upload ảnh' }, { status: 500 })
+  } finally {
+    if (quotaReserved && quotaKey) {
+      try {
+        await releaseDailyQuota({ key: quotaKey })
+      } catch (e) {
+        console.error('Failed to release upload quota', e)
+      }
+    }
   }
 }

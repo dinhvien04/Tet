@@ -1,46 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
 import { connectDB } from '@/lib/mongodb'
 import Event from '@/lib/models/Event'
-import FamilyMember from '@/lib/models/FamilyMember'
+import {
+  AuthError,
+  authErrorResponse,
+  requireFamilyMember,
+  requireUser,
+} from '@/lib/authorization'
+import {
+  optionalString,
+  parseJsonBody,
+  pickFamilyId,
+  requireDate,
+  requireEnum,
+  requireObjectIdString,
+  requireString,
+  ValidationError,
+  validationErrorResponse,
+} from '@/lib/api/validate'
+import { parseLimit, decodeCursor, cursorFilter, buildNextCursor } from '@/lib/api/pagination'
+
+const MAX_TITLE = 200
+const MAX_LOCATION = 500
+const FILTERS = ['all', 'upcoming', 'past'] as const
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
-    }
+    const body = await parseJsonBody(request)
+    const familyId = pickFamilyId(body)
+    const title = requireString(body.title, 'title', { max: MAX_TITLE })
+    const date = requireDate(body.date, 'date')
+    const location = optionalString(body.location, 'location', { max: MAX_LOCATION }) || ''
 
-    const body = await request.json()
-    const familyId = body.familyId || body.family_id
-    const title = body.title
-    const date = body.date
-    const location = body.location
-
-    if (!familyId || !title || !date) {
-      return NextResponse.json({ error: 'Thieu thong tin bat buoc' }, { status: 400 })
-    }
-
-    await connectDB()
-
-    const membership = await FamilyMember.findOne({
-      familyId,
-      userId: session.user.id,
-    })
-    if (!membership) {
-      return NextResponse.json(
-        { error: 'Ban khong phai thanh vien cua nha nay' },
-        { status: 403 }
-      )
-    }
+    const { user, familyId: familyObjectId } = await requireFamilyMember(familyId)
 
     const event = await Event.create({
-      familyId,
-      title: title.trim(),
-      date: new Date(date),
-      location: location?.trim() || '',
-      createdBy: session.user.id,
+      familyId: familyObjectId,
+      title,
+      date,
+      location,
+      createdBy: user.id,
     })
 
     await event.populate('createdBy', 'name email avatar')
@@ -51,75 +50,97 @@ export async function POST(request: NextRequest) {
       avatar?: string
     }
 
+    const familyIdStr = event.familyId.toString()
+    const creatorId = creator._id.toString()
+
     return NextResponse.json({
       success: true,
       event: {
         id: event._id.toString(),
-        family_id: event.familyId.toString(),
+        familyId: familyIdStr,
         title: event.title,
         date: event.date,
         location: event.location,
-        created_by: creator._id.toString(),
+        createdBy: creatorId,
+        createdAt: event.createdAt,
+        // legacy aliases for existing UI types
+        family_id: familyIdStr,
+        created_by: creatorId,
         created_at: event.createdAt,
         creator: {
-          id: creator._id.toString(),
+          id: creatorId,
           name: creator.name,
           email: creator.email,
           avatar: creator.avatar,
         },
         users: {
-          id: creator._id.toString(),
+          id: creatorId,
           name: creator.name,
           avatar: creator.avatar,
         },
       },
     })
   } catch (error) {
+    if (error instanceof AuthError) {
+      const { error: message, status } = authErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
+    if (error instanceof ValidationError || error instanceof SyntaxError) {
+      const { error: message, status } = validationErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
     console.error('Error creating event:', error)
-    return NextResponse.json({ error: 'Khong the tao su kien' }, { status: 500 })
+    return NextResponse.json({ error: 'Không thể tạo sự kiện' }, { status: 500 })
   }
 }
 
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Vui long dang nhap' }, { status: 401 })
-    }
-
+    await requireUser()
     const { searchParams } = new URL(request.url)
-    const familyId = searchParams.get('familyId')
-    // filter: all | upcoming | past
-    const filter = (searchParams.get('filter') || 'all').toLowerCase()
-    if (!familyId) {
-      return NextResponse.json({ error: 'Thieu familyId' }, { status: 400 })
+    const familyIdRaw = searchParams.get('familyId')
+    if (!familyIdRaw) {
+      return NextResponse.json({ error: 'Thiếu familyId' }, { status: 400 })
     }
+    const familyId = requireObjectIdString(familyIdRaw, 'familyId')
 
+    const filterRaw = (searchParams.get('filter') || 'all').toLowerCase()
+    const filter = requireEnum(filterRaw, 'filter', FILTERS)
+    const limit = parseLimit(searchParams.get('limit'))
+    const cursor = decodeCursor(searchParams.get('cursor'))
+
+    const { familyId: familyObjectId } = await requireFamilyMember(familyId)
     await connectDB()
 
-    const membership = await FamilyMember.findOne({
-      familyId,
-      userId: session.user.id,
-    })
-    if (!membership) {
-      return NextResponse.json(
-        { error: 'Ban khong phai thanh vien cua nha nay' },
-        { status: 403 }
-      )
+    const now = new Date()
+    // Past: newest first (desc); upcoming/all: soonest first (asc)
+    const sortDir = filter === 'past' ? -1 : 1
+    const cursorDir = filter === 'past' ? 'desc' : 'asc'
+
+    const andClauses: Record<string, unknown>[] = [{ familyId: familyObjectId }]
+    if (filter === 'upcoming') {
+      andClauses.push({ date: { $gte: now } })
+    } else if (filter === 'past') {
+      andClauses.push({ date: { $lt: now } })
+    }
+    const cursorPart = cursorFilter(cursor, 'date', cursorDir)
+    if (Object.keys(cursorPart).length > 0) {
+      andClauses.push(cursorPart)
     }
 
-    const now = new Date()
-    const query: Record<string, unknown> = { familyId }
-    if (filter === 'upcoming') {
-      query.date = { $gte: now }
-    } else if (filter === 'past') {
-      query.date = { $lt: now }
-    }
+    const query = andClauses.length === 1 ? andClauses[0] : { $and: andClauses }
 
     const events = await Event.find(query)
       .populate('createdBy', 'name email avatar')
-      .sort({ date: filter === 'past' ? -1 : 1 })
+      .sort({ date: sortDir, _id: sortDir })
+      .limit(limit)
       .lean()
+
+    const nextCursor = buildNextCursor(
+      events as Array<{ date?: Date; createdAt: Date; _id: { toString(): string } }>,
+      limit,
+      'date'
+    )
 
     const formattedEvents = events.map((eventDoc) => {
       const creator = eventDoc.createdBy as unknown as {
@@ -128,32 +149,49 @@ export async function GET(request: NextRequest) {
         email: string
         avatar?: string
       }
+      const familyIdStr = eventDoc.familyId.toString()
+      const creatorId = creator._id.toString()
 
       return {
         id: eventDoc._id.toString(),
-        family_id: eventDoc.familyId.toString(),
+        familyId: familyIdStr,
         title: eventDoc.title,
         date: eventDoc.date,
         location: eventDoc.location,
-        created_by: creator._id.toString(),
+        createdBy: creatorId,
+        createdAt: eventDoc.createdAt,
+        family_id: familyIdStr,
+        created_by: creatorId,
         created_at: eventDoc.createdAt,
         creator: {
-          id: creator._id.toString(),
+          id: creatorId,
           name: creator.name,
           email: creator.email,
           avatar: creator.avatar,
         },
         users: {
-          id: creator._id.toString(),
+          id: creatorId,
           name: creator.name,
           avatar: creator.avatar,
         },
       }
     })
 
-    return NextResponse.json({ events: formattedEvents })
+    return NextResponse.json({
+      events: formattedEvents,
+      nextCursor,
+      limit,
+    })
   } catch (error) {
+    if (error instanceof AuthError) {
+      const { error: message, status } = authErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
+    if (error instanceof ValidationError) {
+      const { error: message, status } = validationErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
     console.error('Error fetching events:', error)
-    return NextResponse.json({ error: 'Khong the lay danh sach su kien' }, { status: 500 })
+    return NextResponse.json({ error: 'Không thể lấy danh sách sự kiện' }, { status: 500 })
   }
 }

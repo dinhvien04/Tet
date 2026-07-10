@@ -118,21 +118,19 @@ describe('Error Handling', () => {
 
     it('should throw after max retries', async () => {
       const fn = vi.fn().mockRejectedValue(new APIError('Server error', 500))
-      
-      const promise = retryWithBackoff(fn, { 
+
+      const promise = retryWithBackoff(fn, {
         maxRetries: 2,
         baseDelay: 100,
       })
 
+      // Attach rejection handler before flushing timers to avoid unhandled rejection
+      const assertion = expect(promise).rejects.toMatchObject({
+        message: 'Server error',
+      })
       await vi.runAllTimersAsync()
-      
-      try {
-        await promise
-        expect.fail('Should have thrown')
-      } catch (error: any) {
-        expect(error.message).toBe('Server error')
-      }
-      
+      await assertion
+
       expect(fn).toHaveBeenCalledTimes(3) // Initial + 2 retries
     })
 

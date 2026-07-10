@@ -50,33 +50,58 @@ export function decodeCursor(cursor: string | null | undefined): CursorPayload |
 }
 
 /**
- * Mongo filter for items strictly older than the cursor (desc sort).
+ * Mongo filter for pagination relative to cursor.
+ * @param direction 'desc' → older items ($lt); 'asc' → newer/later items ($gt)
  */
 export function cursorFilter(
   cursor: CursorPayload | null,
-  dateField = 'createdAt'
+  dateField = 'createdAt',
+  direction: 'desc' | 'asc' = 'desc'
 ): Record<string, unknown> {
   if (!cursor) return {}
 
+  const cursorDate = new Date(cursor.createdAt)
+  if (direction === 'asc') {
+    return {
+      $or: [
+        { [dateField]: { $gt: cursorDate } },
+        {
+          [dateField]: cursorDate,
+          _id: { $gt: cursor.id },
+        },
+      ],
+    }
+  }
+
   return {
     $or: [
-      { [dateField]: { $lt: new Date(cursor.createdAt) } },
+      { [dateField]: { $lt: cursorDate } },
       {
-        [dateField]: new Date(cursor.createdAt),
+        [dateField]: cursorDate,
         _id: { $lt: cursor.id },
       },
     ],
   }
 }
 
-export function buildNextCursor<T extends { createdAt?: Date; uploadedAt?: Date; _id: { toString(): string } }>(
-  items: T[],
-  limit: number,
-  dateField: 'createdAt' | 'uploadedAt' = 'createdAt'
-): string | null {
+type CursorDateFields = 'createdAt' | 'uploadedAt' | 'date'
+
+export function buildNextCursor<
+  T extends {
+    createdAt?: Date
+    uploadedAt?: Date
+    date?: Date
+    _id: { toString(): string }
+  },
+>(items: T[], limit: number, dateField: CursorDateFields = 'createdAt'): string | null {
   if (items.length < limit) return null
   const last = items[items.length - 1]
-  const date = dateField === 'uploadedAt' ? last.uploadedAt : last.createdAt
+  const date =
+    dateField === 'uploadedAt'
+      ? last.uploadedAt
+      : dateField === 'date'
+        ? last.date
+        : last.createdAt
   if (!date) return null
   return encodeCursor(date, last._id.toString())
 }
