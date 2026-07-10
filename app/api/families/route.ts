@@ -4,16 +4,7 @@ import { authOptions } from '@/app/api/auth/[...nextauth]/route'
 import { connectDB } from '@/lib/mongodb'
 import Family from '@/lib/models/Family'
 import FamilyMember from '@/lib/models/FamilyMember'
-
-// Generate unique 8-character invite code
-function generateInviteCode(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-  let code = ''
-  for (let i = 0; i < 8; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length))
-  }
-  return code
-}
+import { generateUniqueInviteCode } from '@/lib/invite-code'
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,24 +30,10 @@ export async function POST(request: NextRequest) {
 
     await connectDB()
 
-    // Generate unique invite code with retry logic
-    let inviteCode = generateInviteCode()
-    let attempts = 0
-    const maxAttempts = 10
-
-    while (attempts < maxAttempts) {
-      // Check if code already exists
-      const existing = await Family.findOne({ inviteCode })
-
-      if (!existing) {
-        break // Code is unique
-      }
-
-      inviteCode = generateInviteCode()
-      attempts++
-    }
-
-    if (attempts >= maxAttempts) {
+    let inviteCode: string
+    try {
+      inviteCode = await generateUniqueInviteCode()
+    } catch {
       return NextResponse.json(
         { error: 'Không thể tạo mã mời duy nhất. Vui lòng thử lại.' },
         { status: 500 }

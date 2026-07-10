@@ -1,53 +1,54 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
 import { connectDB } from '@/lib/mongodb'
 import Photo from '@/lib/models/Photo'
-import FamilyMember from '@/lib/models/FamilyMember'
+import {
+  AuthError,
+  authErrorResponse,
+  requireFamilyMember,
+} from '@/lib/authorization'
+import {
+  parseLimit,
+  decodeCursor,
+  cursorFilter,
+  buildNextCursor,
+} from '@/lib/api/pagination'
 
 export async function GET(request: NextRequest) {
   try {
-    // Check authentication
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    await connectDB()
-
-    // Get familyId from query params
     const searchParams = request.nextUrl.searchParams
     const familyId = searchParams.get('familyId')
-    const from = parseInt(searchParams.get('from') || '0')
-    const limit = parseInt(searchParams.get('to') || '19') - from + 1
-
     if (!familyId) {
-      return NextResponse.json(
-        { error: 'Missing familyId parameter' },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: 'Thiếu familyId' }, { status: 400 })
     }
 
-    // Verify user is member of the family
-    const membership = await FamilyMember.findOne({
+    await requireFamilyMember(familyId)
+    await connectDB()
+
+    const limit = parseLimit(searchParams.get('limit') || searchParams.get('to'))
+    const cursor = decodeCursor(searchParams.get('cursor'))
+    const from = Math.max(0, parseInt(searchParams.get('from') || '0', 10) || 0)
+
+    const filter = {
       familyId,
-      userId: session.user.id,
-    })
-
-    if (!membership) {
-      return NextResponse.json(
-        { error: 'You are not a member of this family' },
-        { status: 403 }
-      )
+      ...cursorFilter(cursor, 'uploadedAt'),
     }
 
-    // Get photos with user info, ordered by upload time (newest first) with pagination
-    const photos = await Photo.find({ familyId })
+    // uploadedAt is the photo date field — use createdAt-style cursor on uploadedAt
+    let query = Photo.find(filter)
       .populate('userId', 'name email avatar')
-      .sort({ uploadedAt: -1 })
-      .skip(from)
+      .sort({ uploadedAt: -1, _id: -1 })
       .limit(limit)
-      .lean()
+
+    if (!cursor && from > 0) {
+      query = query.skip(Math.min(from, 500))
+    }
+
+    const photos = await query.lean()
+    const nextCursor = buildNextCursor(
+      photos as Array<{ uploadedAt: Date; _id: { toString(): string } }>,
+      limit,
+      'uploadedAt'
+    )
 
     const formattedPhotos = photos.map((photo) => {
       const user = photo.userId as unknown as {
@@ -60,14 +61,13 @@ export async function GET(request: NextRequest) {
       return {
         id: photo._id.toString(),
         url: photo.url,
-        family_id: photo.familyId.toString(),
-        user_id: user._id.toString(),
-        uploaded_at: photo.uploadedAt,
-        cloudinary_public_id: photo.publicId,
-        // Backward-compatible camelCase keys
         familyId: photo.familyId.toString(),
         userId: user._id.toString(),
         uploadedAt: photo.uploadedAt,
+        // legacy snake_case for older clients
+        family_id: photo.familyId.toString(),
+        user_id: user._id.toString(),
+        uploaded_at: photo.uploadedAt,
         users: {
           id: user._id.toString(),
           name: user.name,
@@ -77,12 +77,17 @@ export async function GET(request: NextRequest) {
       }
     })
 
-    return NextResponse.json(formattedPhotos, { status: 200 })
+    return NextResponse.json({
+      photos: formattedPhotos,
+      nextCursor,
+      limit,
+    })
   } catch (error) {
-    console.error('Unexpected error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    if (error instanceof AuthError) {
+      const { error: message, status } = authErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
+    console.error('Error listing photos:', error)
+    return NextResponse.json({ error: 'Không thể tải ảnh' }, { status: 500 })
   }
 }
