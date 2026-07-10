@@ -129,7 +129,7 @@ export async function checkAndCreateNotifications() {
         title: `Sự kiện "${event.title}" sắp diễn ra`,
         content: `Sự kiện sẽ diễn ra vào ${when}${event.location ? ` tại ${event.location}` : ''}`,
         link: eventLink,
-        dedupeKey: `event:${event._id}:user:${member.userId}:day:${dayKey}`,
+        dedupeKey: `event:${event._id}:user:${member.userId}:window:24h`,
         read: false,
         createdAt: now,
       })
@@ -150,7 +150,7 @@ export async function checkAndCreateNotifications() {
         title: 'Bạn có công việc chưa hoàn thành',
         content: `"${task.task}" trong sự kiện "${event.title}"`,
         link: eventLink,
-        dedupeKey: `task:${task._id}:user:${task.assignedTo}:day:${dayKey}`,
+        dedupeKey: `task:${task._id}:user:${task.assignedTo}:window:24h`,
         read: false,
         createdAt: now,
       })

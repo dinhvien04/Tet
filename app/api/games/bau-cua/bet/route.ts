@@ -8,6 +8,10 @@ import {
   authErrorResponse,
   requireFamilyMember,
 } from '@/lib/authorization'
+import {
+  TransactionNotSupportedError,
+  withMongoTransaction,
+} from '@/lib/mongo-transaction'
 
 const MAX_BET = 1000
 const STARTING_BALANCE = 1000
@@ -22,6 +26,13 @@ export async function POST(request: NextRequest) {
       typeof body.idempotencyKey === 'string' && body.idempotencyKey.trim()
         ? body.idempotencyKey.trim().slice(0, 100)
         : undefined
+
+    if (!idempotencyKey) {
+      return NextResponse.json(
+        { error: 'Thiếu idempotencyKey (bắt buộc để tránh cược trùng khi retry)' },
+        { status: 400 }
+      )
+    }
 
     if (!familyIdRaw || !item || Number.isNaN(amount)) {
       return NextResponse.json({ error: 'Thiếu dữ liệu đặt cược' }, { status: 400 })
@@ -41,158 +52,166 @@ export async function POST(request: NextRequest) {
     const { user, familyId } = await requireFamilyMember(String(familyIdRaw))
     await connectDB()
 
-    const round = await BauCuaRound.findOne({
-      familyId,
-      status: 'betting',
-    }).sort({ roundNumber: -1 })
-
-    if (!round) {
-      return NextResponse.json({ error: 'Chưa có ván đang mở để đặt cược' }, { status: 409 })
-    }
-
-    if (round.bettingClosesAt && new Date() > round.bettingClosesAt) {
-      return NextResponse.json({ error: 'Đã hết thời gian đặt cược' }, { status: 409 })
-    }
-
-    // Idempotent retry
-    if (idempotencyKey) {
-      const existing = await BauCuaBet.findOne({
-        roundId: round._id,
-        userId: user.id,
-        idempotencyKey,
-      })
-      if (existing) {
-        const wallet = await BauCuaWallet.findOne({ familyId, userId: user.id }).lean()
-        return NextResponse.json({
-          success: true,
-          idempotent: true,
-          bet: {
-            id: existing._id.toString(),
-            item: existing.item,
-            amount: existing.amount,
-          },
-          wallet: {
-            balance: wallet?.balance ?? STARTING_BALANCE,
-            reservedBalance: wallet?.reservedBalance ?? 0,
-            availableBalance:
-              (wallet?.balance ?? STARTING_BALANCE) - (wallet?.reservedBalance ?? 0),
-          },
-        })
-      }
-    }
-
-    // Ensure wallet exists
-    await BauCuaWallet.findOneAndUpdate(
-      { familyId, userId: user.id },
-      {
-        $setOnInsert: {
-          balance: STARTING_BALANCE,
-          reservedBalance: 0,
-          updatedAt: new Date(),
-        },
-      },
-      { upsert: true }
-    )
-
-    // Atomic reserve: only if available balance covers amount
-    const wallet = await BauCuaWallet.findOneAndUpdate(
-      {
-        familyId,
-        userId: user.id,
-        $expr: {
-          $gte: [{ $subtract: ['$balance', '$reservedBalance'] }, amount],
-        },
-      },
-      {
-        $inc: { reservedBalance: amount },
-        $set: { updatedAt: new Date() },
-      },
-      { new: true }
-    )
-
-    if (!wallet) {
-      return NextResponse.json(
-        { error: 'Không đủ điểm khả dụng để đặt cược' },
-        { status: 400 }
-      )
-    }
-
-    // Double-check round still betting (CAS)
-    const stillOpen = await BauCuaRound.findOne({
-      _id: round._id,
-      status: 'betting',
-    })
-    if (!stillOpen) {
-      // Release reservation
-      await BauCuaWallet.updateOne(
-        { _id: wallet._id },
-        { $inc: { reservedBalance: -amount }, $set: { updatedAt: new Date() } }
-      )
-      return NextResponse.json({ error: 'Ván đã khóa, không thể đặt cược' }, { status: 409 })
-    }
-
     try {
-      const createdBet = await BauCuaBet.create({
-        roundId: round._id,
-        familyId,
-        userId: user.id,
-        item,
-        amount,
-        idempotencyKey,
-        createdAt: new Date(),
-      })
+      const payload = await withMongoTransaction(async (session) => {
+        const roundQ = BauCuaRound.findOne({ familyId, status: 'betting' }).sort({
+          roundNumber: -1,
+        })
+        if (session) roundQ.session(session)
+        const round = await roundQ
 
-      return NextResponse.json({
-        success: true,
-        bet: {
-          id: createdBet._id.toString(),
-          item: createdBet.item,
-          amount: createdBet.amount,
-        },
-        wallet: {
-          balance: wallet.balance,
-          reservedBalance: wallet.reservedBalance,
-          availableBalance: wallet.balance - wallet.reservedBalance,
-        },
-        round: {
-          id: round._id.toString(),
-          roundNumber: round.roundNumber,
-        },
-      })
-    } catch (createError: unknown) {
-      // Rollback reservation on bet insert failure (incl. duplicate idempotency)
-      await BauCuaWallet.updateOne(
-        { _id: wallet._id },
-        { $inc: { reservedBalance: -amount }, $set: { updatedAt: new Date() } }
-      )
+        if (!round) {
+          throw new AuthError('Chưa có ván đang mở để đặt cược', 409)
+        }
 
-      const err = createError as { code?: number }
-      if (err.code === 11000 && idempotencyKey) {
-        const existing = await BauCuaBet.findOne({
+        if (round.bettingClosesAt && new Date() > round.bettingClosesAt) {
+          throw new AuthError('Đã hết thời gian đặt cược', 409)
+        }
+
+        const existingQ = BauCuaBet.findOne({
           roundId: round._id,
           userId: user.id,
           idempotencyKey,
         })
+        if (session) existingQ.session(session)
+        const existing = await existingQ
+
         if (existing) {
-          const fresh = await BauCuaWallet.findOne({ familyId, userId: user.id }).lean()
-          return NextResponse.json({
-            success: true,
-            idempotent: true,
-            bet: {
-              id: existing._id.toString(),
-              item: existing.item,
-              amount: existing.amount,
-            },
-            wallet: {
-              balance: fresh?.balance ?? STARTING_BALANCE,
-              reservedBalance: fresh?.reservedBalance ?? 0,
-              availableBalance:
-                (fresh?.balance ?? STARTING_BALANCE) - (fresh?.reservedBalance ?? 0),
-            },
-          })
+          const walletQ = BauCuaWallet.findOne({ familyId, userId: user.id })
+          if (session) walletQ.session(session)
+          const wallet = await walletQ
+          return {
+            idempotent: true as const,
+            bet: existing,
+            wallet,
+            round,
+          }
         }
+
+        await BauCuaWallet.findOneAndUpdate(
+          { familyId, userId: user.id },
+          {
+            $setOnInsert: {
+              balance: STARTING_BALANCE,
+              reservedBalance: 0,
+              updatedAt: new Date(),
+            },
+          },
+          { upsert: true, ...(session ? { session } : {}) }
+        )
+
+        const wallet = await BauCuaWallet.findOneAndUpdate(
+          {
+            familyId,
+            userId: user.id,
+            $expr: {
+              $gte: [{ $subtract: ['$balance', '$reservedBalance'] }, amount],
+            },
+          },
+          {
+            $inc: { reservedBalance: amount },
+            $set: { updatedAt: new Date() },
+          },
+          { new: true, ...(session ? { session } : {}) }
+        )
+
+        if (!wallet) {
+          throw new AuthError('Không đủ điểm khả dụng để đặt cược', 400)
+        }
+
+        try {
+          const [createdBet] = await BauCuaBet.create(
+            [
+              {
+                roundId: round._id,
+                familyId,
+                userId: user.id,
+                item,
+                amount,
+                idempotencyKey,
+                createdAt: new Date(),
+              },
+            ],
+            session ? { session } : undefined
+          )
+
+          return {
+            idempotent: false as const,
+            bet: createdBet,
+            wallet,
+            round,
+          }
+        } catch (createError: unknown) {
+          const err = createError as { code?: number }
+          if (err.code === 11000) {
+            const againQ = BauCuaBet.findOne({
+              roundId: round._id,
+              userId: user.id,
+              idempotencyKey,
+            })
+            if (session) againQ.session(session)
+            const again = await againQ
+            if (again) {
+              await BauCuaWallet.updateOne(
+                { _id: wallet._id },
+                {
+                  $inc: { reservedBalance: -amount },
+                  $set: { updatedAt: new Date() },
+                },
+                session ? { session } : undefined
+              )
+              const w2Q = BauCuaWallet.findById(wallet._id)
+              if (session) w2Q.session(session)
+              const w2 = await w2Q
+              return {
+                idempotent: true as const,
+                bet: again,
+                wallet: w2,
+                round,
+              }
+            }
+          }
+          throw createError
+        }
+      })
+
+      const w = payload.wallet
+      const bal = w?.balance ?? STARTING_BALANCE
+      const reserved = w?.reservedBalance ?? 0
+
+      return NextResponse.json({
+        success: true,
+        idempotent: payload.idempotent,
+        bet: {
+          id: payload.bet._id.toString(),
+          item: payload.bet.item,
+          amount: payload.bet.amount,
+        },
+        wallet: {
+          balance: bal,
+          reservedBalance: reserved,
+          availableBalance: bal - reserved,
+        },
+        round: {
+          id: payload.round._id.toString(),
+          roundNumber: payload.round.roundNumber,
+        },
+      })
+    } catch (error) {
+      if (error instanceof AuthError) {
+        const { error: message, status } = authErrorResponse(error)
+        return NextResponse.json({ error: message }, { status })
       }
-      throw createError
+      if (error instanceof TransactionNotSupportedError) {
+        return NextResponse.json(
+          {
+            error:
+              'Máy chủ game cần MongoDB replica set (transaction). Cấu hình Atlas/replica set.',
+          },
+          { status: 503 }
+        )
+      }
+      throw error
     }
   } catch (error) {
     if (error instanceof AuthError) {

@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
 import BauCuaRound from '@/lib/models/BauCuaRound'
+import BauCuaFamilyState from '@/lib/models/BauCuaFamilyState'
 import {
   AuthError,
   authErrorResponse,
   requireFamilyMember,
 } from '@/lib/authorization'
+import {
+  TransactionNotSupportedError,
+  withMongoTransaction,
+} from '@/lib/mongo-transaction'
 
 const BETTING_WINDOW_MS = 60_000
 
@@ -18,9 +23,6 @@ export async function POST(request: NextRequest) {
     }
 
     const { user, membership, familyId } = await requireFamilyMember(String(familyIdRaw))
-    await connectDB()
-
-    // Only family admin can open a round (host)
     if (membership.role !== 'admin') {
       return NextResponse.json(
         { error: 'Chỉ admin gia đình mới được mở ván Bầu Cua' },
@@ -28,80 +30,114 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const activeRound = await BauCuaRound.findOne({
-      familyId,
-      status: { $in: ['betting', 'rolling'] },
-    }).sort({ roundNumber: -1 })
-
-    if (activeRound) {
-      if (activeRound.status === 'betting') {
-        return NextResponse.json({
-          success: true,
-          round: {
-            id: activeRound._id.toString(),
-            roundNumber: activeRound.roundNumber,
-            status: activeRound.status,
-            hostUserId: activeRound.hostUserId?.toString(),
-            bettingClosesAt: activeRound.bettingClosesAt,
-            startedAt: activeRound.startedAt,
-          },
-        })
-      }
-
-      return NextResponse.json(
-        { error: 'Ván trước đang được quay, vui lòng đợi' },
-        { status: 409 }
-      )
-    }
-
-    const latestRound = await BauCuaRound.findOne({ familyId }).sort({ roundNumber: -1 })
-    const nextNumber = latestRound ? latestRound.roundNumber + 1 : 1
-    const now = new Date()
+    await connectDB()
 
     try {
-      const newRound = await BauCuaRound.create({
-        familyId,
-        roundNumber: nextNumber,
-        status: 'betting',
-        hostUserId: user.id,
-        bettingClosesAt: new Date(now.getTime() + BETTING_WINDOW_MS),
-        settlementCompleted: false,
-        startedAt: now,
+      const result = await withMongoTransaction(async (session) => {
+        const q = <T>(query: T): T => {
+          if (session && query && typeof (query as { session?: unknown }).session === 'function') {
+            return (query as { session: (s: typeof session) => T }).session(session)
+          }
+          return query
+        }
+
+        let state = await q(BauCuaFamilyState.findOne({ familyId }))
+        if (!state) {
+          try {
+            await BauCuaFamilyState.create(
+              [
+                {
+                  familyId,
+                  activeRoundId: null,
+                  status: 'idle',
+                  version: 0,
+                  updatedAt: new Date(),
+                },
+              ],
+              session ? { session } : undefined
+            )
+          } catch {
+            // concurrent create
+          }
+          state = await q(BauCuaFamilyState.findOne({ familyId }))
+        }
+
+        if (state?.status === 'betting' || state?.status === 'rolling') {
+          const active = state.activeRoundId
+            ? await q(BauCuaRound.findById(state.activeRoundId))
+            : await q(
+                BauCuaRound.findOne({
+                  familyId,
+                  status: { $in: ['betting', 'rolling'] },
+                }).sort({ roundNumber: -1 })
+              )
+
+          if (active) {
+            return {
+              existing: true as const,
+              round: active,
+            }
+          }
+        }
+
+        const latestRound = await q(
+          BauCuaRound.findOne({ familyId }).sort({ roundNumber: -1 })
+        )
+        const nextNumber = latestRound ? latestRound.roundNumber + 1 : 1
+        const now = new Date()
+
+        const [newRound] = await BauCuaRound.create(
+          [
+            {
+              familyId,
+              roundNumber: nextNumber,
+              status: 'betting',
+              hostUserId: user.id,
+              bettingClosesAt: new Date(now.getTime() + BETTING_WINDOW_MS),
+              settlementCompleted: false,
+              startedAt: now,
+            },
+          ],
+          session ? { session } : undefined
+        )
+
+        await BauCuaFamilyState.findOneAndUpdate(
+          { familyId },
+          {
+            $set: {
+              activeRoundId: newRound._id,
+              status: 'betting',
+              updatedAt: now,
+            },
+            $inc: { version: 1 },
+          },
+          { upsert: true, ...(session ? { session } : {}) }
+        )
+
+        return { existing: false as const, round: newRound }
       })
 
+      const round = result.round
       return NextResponse.json({
         success: true,
         round: {
-          id: newRound._id.toString(),
-          roundNumber: newRound.roundNumber,
-          status: newRound.status,
-          hostUserId: newRound.hostUserId.toString(),
-          bettingClosesAt: newRound.bettingClosesAt,
-          startedAt: newRound.startedAt,
+          id: round._id.toString(),
+          roundNumber: round.roundNumber,
+          status: round.status,
+          hostUserId: round.hostUserId?.toString(),
+          bettingClosesAt: round.bettingClosesAt,
+          startedAt: round.startedAt,
         },
       })
-    } catch (error: unknown) {
-      // Unique (familyId, roundNumber) race — return existing active if any
-      const err = error as { code?: number }
-      if (err.code === 11000) {
-        const existing = await BauCuaRound.findOne({
-          familyId,
-          status: { $in: ['betting', 'rolling'] },
-        }).sort({ roundNumber: -1 })
-
-        if (existing) {
-          return NextResponse.json({
-            success: true,
-            round: {
-              id: existing._id.toString(),
-              roundNumber: existing.roundNumber,
-              status: existing.status,
-              hostUserId: existing.hostUserId?.toString(),
-              bettingClosesAt: existing.bettingClosesAt,
-              startedAt: existing.startedAt,
-            },
-          })
-        }
+    } catch (error) {
+      if (error instanceof TransactionNotSupportedError) {
+        return NextResponse.json(
+          {
+            error:
+              'Máy chủ game cần MongoDB replica set (transaction). Kiểm tra MONGODB_URI / Atlas.',
+          },
+          { status: 503 }
+        )
       }
       throw error
     }

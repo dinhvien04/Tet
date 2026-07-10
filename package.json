@@ -9,7 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:ci": "vitest run tests/safe-redirect.test.ts tests/cron-auth.test.ts tests/ai-generate-security.test.ts tests/pagination.test.ts tests/dashboard-summary-api.test.ts tests/posts-delete-api.test.ts tests/event-crud-api.test.ts tests/photo-delete-api.test.ts tests/family-invite-regen.test.ts tests/profile-api.test.ts tests/comment-delete-api.test.ts tests/rsvp-api.test.ts tests/ics.test.ts tests/profile-delete-api.test.ts tests/profile-export-api.test.ts tests/preferences-api.test.ts tests/join-request-api.test.ts tests/invite-validity.test.ts tests/families-create-api.test.ts tests/validate-api.test.ts tests/sw-privacy.test.ts tests/join-invite-required.test.ts",
+    "test:ci": "vitest run tests/safe-redirect.test.ts tests/cron-auth.test.ts tests/ai-generate-security.test.ts tests/pagination.test.ts tests/dashboard-summary-api.test.ts tests/posts-delete-api.test.ts tests/event-crud-api.test.ts tests/photo-delete-api.test.ts tests/family-invite-regen.test.ts tests/profile-api.test.ts tests/comment-delete-api.test.ts tests/rsvp-api.test.ts tests/ics.test.ts tests/profile-delete-api.test.ts tests/profile-export-api.test.ts tests/preferences-api.test.ts tests/join-request-api.test.ts tests/invite-validity.test.ts tests/families-create-api.test.ts tests/validate-api.test.ts tests/sw-privacy.test.ts tests/join-invite-required.test.ts tests/mongo-transaction-unit.test.ts",
     "test:legacy": "vitest run tests/legacy-supabase",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",

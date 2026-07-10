@@ -100,39 +100,64 @@ export async function PATCH(
       )
     }
 
-    if (action === 'approve') {
-      const existing = await FamilyMember.findOne({
-        familyId,
-        userId: joinRequest.userId,
-      })
-      if (!existing) {
-        await FamilyMember.create({
-          familyId,
-          userId: joinRequest.userId,
-          role: 'member',
+    // Atomic: only one admin wins the pending → terminal transition
+    const updated = await FamilyJoinRequest.findOneAndUpdate(
+      { _id: requestId, familyId, status: 'pending' },
+      {
+        $set: {
+          status: action === 'approve' ? 'approved' : 'rejected',
+          reviewedBy: admin.user.id,
+          reviewedAt: new Date(),
+        },
+      },
+      { new: true }
+    )
+
+    if (!updated) {
+      // Already processed — idempotent success if approved
+      const current = await FamilyJoinRequest.findById(requestId)
+      if (current && current.status !== 'pending') {
+        return NextResponse.json({
+          success: true,
+          idempotent: true,
+          request: {
+            id: current._id.toString(),
+            status: current.status,
+          },
         })
       }
-      joinRequest.status = 'approved'
-    } else {
-      joinRequest.status = 'rejected'
+      return NextResponse.json(
+        { error: 'Không tìm thấy yêu cầu đang chờ' },
+        { status: 404 }
+      )
     }
 
-    joinRequest.reviewedBy = admin.user.id as unknown as typeof joinRequest.reviewedBy
-    joinRequest.reviewedAt = new Date()
-    await joinRequest.save()
+    if (action === 'approve') {
+      try {
+        await FamilyMember.create({
+          familyId,
+          userId: updated.userId,
+          role: 'member',
+        })
+      } catch (err: unknown) {
+        const e = err as { code?: number }
+        if (e.code !== 11000) throw err
+        // already a member — ok
+      }
+    }
 
     console.log('[audit] join_request.' + action, {
       familyId,
       requestId,
       actorId: admin.user.id,
-      targetUserId: joinRequest.userId.toString(),
+      targetUserId: updated.userId.toString(),
     })
 
     return NextResponse.json({
       success: true,
       request: {
-        id: joinRequest._id.toString(),
-        status: joinRequest.status,
+        id: updated._id.toString(),
+        status: updated.status,
       },
     })
   } catch (error) {

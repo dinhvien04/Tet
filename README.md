@@ -9,7 +9,7 @@
 - **Bài đăng** — timeline, reaction, comment; sửa/xóa (author hoặc family admin)
 - **Sự kiện & task** — lịch họp mặt, phân công, notification cron
 - **Album ảnh** — Cloudinary (bắt buộc production), fallback local chỉ dev
-- **Bầu Cua** — điểm ảo, conditional reserve + settlement CAS (Mongo transaction/replica set planned for full multi-doc atomicity); chỉ host/admin quay
+- **Bầu Cua** — điểm ảo; multi-doc writes via Mongo transactions khi có replica set (Atlas); ledger `BauCuaSettlement`; chỉ host/admin quay
 - **System admin** — `/admin`, phân trang user, đổi role
 
 ## Tech stack
