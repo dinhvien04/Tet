@@ -217,16 +217,28 @@ export async function GET(request: NextRequest) {
 
     const weeklyWinRate = weeklyRoundsPlayed > 0 ? Math.round((weeklyWins / weeklyRoundsPlayed) * 100) : 0
 
+    const reserved =
+      typeof (wallet as { reservedBalance?: number }).reservedBalance === 'number'
+        ? (wallet as { reservedBalance: number }).reservedBalance
+        : myTotalBet
+
     return NextResponse.json({
       wallet: {
         balance: wallet.balance,
-        available_balance: Math.max(0, wallet.balance - myTotalBet),
+        reserved_balance: reserved,
+        available_balance: Math.max(0, wallet.balance - reserved),
+      },
+      membership: {
+        role: membership.role,
+        is_admin: membership.role === 'admin',
       },
       round: latestRound
         ? {
             id: latestRound._id.toString(),
             round_number: latestRound.roundNumber,
             status: latestRound.status,
+            host_user_id: latestRound.hostUserId?.toString?.() || null,
+            betting_closes_at: latestRound.bettingClosesAt || null,
             dice_results: (latestRound.diceResults || []) as BauCuaItem[],
             started_at: latestRound.startedAt,
             rolled_at: latestRound.rolledAt || null,

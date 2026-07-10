@@ -19,11 +19,18 @@ interface GameState {
   wallet: {
     balance: number
     available_balance: number
+    reserved_balance?: number
+  }
+  membership?: {
+    role: string
+    is_admin: boolean
   }
   round: {
     id: string
     round_number: number
     status: 'betting' | 'rolling' | 'rolled'
+    host_user_id?: string | null
+    betting_closes_at?: string | null
     dice_results: BauCuaItem[]
     started_at: string
     rolled_at: string | null
@@ -59,13 +66,21 @@ interface GameState {
   }
 }
 
+const CHIP_AMOUNTS = [10, 20, 50, 100] as const
+
 const ITEM_META: Record<BauCuaItem, { label: string; icon: string; accent: string; decor: [string, string, string, string] }> = {
-  bau: { label: 'Bau', icon: '🎃', accent: '#c81e1e', decor: ['🧧', '✨', '🎋', '🪔'] },
+  bau: { label: 'Bầu', icon: '🎃', accent: '#c81e1e', decor: ['🧧', '✨', '🎋', '🪔'] },
   cua: { label: 'Cua', icon: '🦀', accent: '#dc2626', decor: ['🧨', '🎊', '🧧', '🎇'] },
-  tom: { label: 'Tom', icon: '🦐', accent: '#e85d04', decor: ['🌿', '🧧', '🎍', '🪙'] },
-  ca: { label: 'Ca', icon: '🐟', accent: '#2563eb', decor: ['🌊', '🎏', '🧧', '🪙'] },
-  ga: { label: 'Ga', icon: '🐓', accent: '#ca8a04', decor: ['🪭', '🎐', '🧧', '✨'] },
+  tom: { label: 'Tôm', icon: '🦐', accent: '#e85d04', decor: ['🌿', '🧧', '🎍', '🪙'] },
+  ca: { label: 'Cá', icon: '🐟', accent: '#2563eb', decor: ['🌊', '🎏', '🧧', '🪙'] },
+  ga: { label: 'Gà', icon: '🐓', accent: '#ca8a04', decor: ['🪭', '🎐', '🧧', '✨'] },
   nai: { label: 'Nai', icon: '🦌', accent: '#b45309', decor: ['🎉', '🧧', '🎊', '🍀'] },
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  betting: 'Đang nhận cược',
+  rolling: 'Đang quay',
+  rolled: 'Đã trả thưởng',
 }
 
 function getInitialBetAmounts() {
@@ -97,6 +112,7 @@ export default function BauCuaPage() {
   const [statsDialogOpen, setStatsDialogOpen] = useState(false)
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false)
   const [leaderboardDialogOpen, setLeaderboardDialogOpen] = useState(false)
+  const [countdown, setCountdown] = useState<string | null>(null)
 
   const fetchState = useCallback(
     async (silent = false) => {
@@ -136,8 +152,9 @@ export default function BauCuaPage() {
     if (!currentFamily?.id) return
 
     const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
       void fetchState(true)
-    }, 5000)
+    }, 8000)
 
     return () => clearInterval(timer)
   }, [currentFamily?.id, fetchState])
@@ -183,7 +200,11 @@ export default function BauCuaPage() {
     const amount = Number(betAmounts[item])
 
     if (!Number.isInteger(amount) || amount <= 0) {
-      toast.error('Nhap so diem hop le')
+      toast.error('Nhập số điểm hợp lệ')
+      return
+    }
+
+    if (amount >= 200 && !window.confirm(`Xác nhận đặt ${amount} điểm vào ${ITEM_META[item].label}?`)) {
       return
     }
 
@@ -192,19 +213,24 @@ export default function BauCuaPage() {
       const response = await fetch('/api/games/bau-cua/bet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ familyId: currentFamily.id, item, amount }),
+        body: JSON.stringify({
+          familyId: currentFamily.id,
+          item,
+          amount,
+          idempotencyKey: `${item}-${amount}-${Date.now()}`,
+        }),
       })
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => null)
-        throw new Error(errorData?.error || 'Khong the dat cuoc')
+        throw new Error(errorData?.error || 'Không thể đặt cược')
       }
 
-      toast.success(`Dat ${amount} diem vao ${ITEM_META[item].label}`)
+      toast.success(`Đặt ${amount} điểm vào ${ITEM_META[item].label}`)
       await fetchState(true)
     } catch (error) {
       console.error('Error placing bet:', error)
-      toast.error(error instanceof Error ? error.message : 'Khong the dat cuoc')
+      toast.error(error instanceof Error ? error.message : 'Không thể đặt cược')
     } finally {
       setBetLoadingItem(null)
     }
@@ -300,15 +326,40 @@ export default function BauCuaPage() {
     [myRoundBreakdown]
   )
 
+  useEffect(() => {
+    const closesAt = state?.round?.betting_closes_at
+    if (!closesAt || state?.round?.status !== 'betting') {
+      setCountdown(null)
+      return
+    }
+    const tick = () => {
+      const ms = new Date(closesAt).getTime() - Date.now()
+      if (ms <= 0) {
+        setCountdown('Hết giờ cược')
+        return
+      }
+      const s = Math.ceil(ms / 1000)
+      setCountdown(`${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`)
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [state?.round?.betting_closes_at, state?.round?.status])
+
+  const isAdmin = state?.membership?.is_admin === true
   const canBet = state?.round?.status === 'betting' && actionLoading === null && !isOpeningBowl
-  const canRoll = state?.round?.status === 'betting' && actionLoading === null && !isOpeningBowl
+  const canRoll =
+    isAdmin && state?.round?.status === 'betting' && actionLoading === null && !isOpeningBowl
+  const canStart = isAdmin && actionLoading === null && !isOpeningBowl
 
   if (!currentFamily) {
     return (
       <ProtectedRoute>
         <AppLayout>
-          <div className="max-w-4xl mx-auto">
-            <p className="text-center text-gray-600">Vui long chon gia dinh de choi game</p>
+          <div className="mx-auto max-w-4xl">
+            <p className="text-center text-muted-foreground">
+              Vui lòng chọn gia đình để chơi Bầu Cua
+            </p>
           </div>
         </AppLayout>
       </ProtectedRoute>
@@ -348,9 +399,13 @@ export default function BauCuaPage() {
           <section className="rounded-2xl border border-[#e8bf85] bg-[linear-gradient(120deg,#fff4df_0%,#fee6c0_100%)] p-5 md:p-6 shadow-[0_16px_40px_rgba(131,74,13,0.15)]">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
               <div>
-                <p className="text-[11px] tracking-[0.22em] uppercase text-[#8f4f0f] font-semibold">Tet Board</p>
-                <h1 className="text-3xl md:text-4xl font-black text-[#8c1f17]">Bau Cua Online</h1>
-                <p className="text-sm text-[#5f4122] mt-1">Bo cuc theo chieu bau cua co truyen (2 hang, moi hang 3 o)</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#8f4f0f]">
+                  Bàn Tết
+                </p>
+                <h1 className="text-3xl font-black text-[#8c1f17] md:text-4xl">Bầu Cua Online</h1>
+                <p className="mt-1 text-sm text-[#5f4122]">
+                  Điểm ảo trong nhà — không tiền thật. Chỉ admin mở/quay ván.
+                </p>
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -360,8 +415,8 @@ export default function BauCuaPage() {
                   disabled={loading || !state || isOpeningBowl}
                   className="border-[#d6ab6f] bg-white/70"
                 >
-                  <BarChart3 className="h-4 w-4 mr-2" />
-                  Thong ke
+                  <BarChart3 className="mr-2 h-4 w-4" />
+                  Thống kê
                 </Button>
                 <Button
                   variant="outline"
@@ -369,8 +424,8 @@ export default function BauCuaPage() {
                   disabled={loading || !state || isOpeningBowl}
                   className="border-[#d6ab6f] bg-white/70"
                 >
-                  <History className="h-4 w-4 mr-2" />
-                  Lich su van
+                  <History className="mr-2 h-4 w-4" />
+                  Lịch sử
                 </Button>
                 <Button
                   variant="outline"
@@ -378,8 +433,8 @@ export default function BauCuaPage() {
                   disabled={loading || !state || isOpeningBowl}
                   className="border-[#d6ab6f] bg-white/70"
                 >
-                  <Trophy className="h-4 w-4 mr-2" />
-                  Bang xep hang
+                  <Trophy className="mr-2 h-4 w-4" />
+                  BXH
                 </Button>
                 <Button
                   variant="outline"
@@ -387,23 +442,70 @@ export default function BauCuaPage() {
                   disabled={loading || refreshing || isOpeningBowl}
                   className="border-[#d6ab6f] bg-white/70"
                 >
-                  {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <><RefreshCw className="h-4 w-4 mr-2" />Lam moi</>}
+                  {refreshing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      Làm mới
+                    </>
+                  )}
                 </Button>
-                <Button onClick={handleStartRound} disabled={actionLoading !== null || isOpeningBowl} className="bg-[#b91c1c] hover:bg-[#991b1b] text-white">
-                  {actionLoading === 'start' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Mo van moi'}
-                </Button>
-                <Button variant="outline" onClick={handleRoll} disabled={!canRoll} className="border-[#955f1d] text-[#7b4208] bg-[#fff4df]">
-                  {actionLoading === 'roll' ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Dice5 className="h-4 w-4 mr-2" />Quay</>}
-                </Button>
+                {isAdmin && (
+                  <>
+                    <Button
+                      onClick={handleStartRound}
+                      disabled={!canStart}
+                      className="bg-[#b91c1c] text-white hover:bg-[#991b1b]"
+                    >
+                      {actionLoading === 'start' ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        'Mở ván mới'
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={handleRoll}
+                      disabled={!canRoll}
+                      className="border-[#955f1d] bg-[#fff4df] text-[#7b4208]"
+                    >
+                      {actionLoading === 'roll' ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Dice5 className="mr-2 h-4 w-4" />
+                          Quay
+                        </>
+                      )}
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
 
             {state?.round && (
               <div className="mt-4 flex flex-wrap gap-2 text-xs">
-                <span className="px-3 py-1 rounded-full bg-white border border-[#ebcb9a]">Van #{state.round.round_number}</span>
-                <span className="px-3 py-1 rounded-full bg-white border border-[#ebcb9a] uppercase">{state.round.status}</span>
-                <span className="px-3 py-1 rounded-full bg-white border border-[#ebcb9a]">Vi: {state.wallet.balance}</span>
-                <span className="px-3 py-1 rounded-full bg-white border border-[#ebcb9a]">Kha dung: {state.wallet.available_balance}</span>
+                <span className="rounded-full border border-[#ebcb9a] bg-white px-3 py-1">
+                  Ván #{state.round.round_number}
+                </span>
+                <span className="rounded-full border border-[#ebcb9a] bg-white px-3 py-1">
+                  {STATUS_LABEL[state.round.status] || state.round.status}
+                </span>
+                {countdown && (
+                  <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 font-semibold text-red-700">
+                    Còn {countdown}
+                  </span>
+                )}
+                <span className="rounded-full border border-[#ebcb9a] bg-white px-3 py-1">
+                  Ví: {state.wallet.balance}
+                </span>
+                <span className="rounded-full border border-[#ebcb9a] bg-white px-3 py-1">
+                  Đang giữ: {state.wallet.reserved_balance ?? state.my_total_bet}
+                </span>
+                <span className="rounded-full border border-[#ebcb9a] bg-white px-3 py-1">
+                  Khả dụng: {state.wallet.available_balance}
+                </span>
               </div>
             )}
           </section>
@@ -674,30 +776,55 @@ export default function BauCuaPage() {
                           </div>
                         </div>
 
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {CHIP_AMOUNTS.map((chip) => (
+                            <button
+                              key={chip}
+                              type="button"
+                              disabled={!canBet || betLoadingItem !== null}
+                              onClick={() =>
+                                setBetAmounts((prev) => ({ ...prev, [item]: String(chip) }))
+                              }
+                              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                betAmounts[item] === String(chip)
+                                  ? 'bg-[#ffd07b] text-[#7a2d17]'
+                                  : 'bg-white/20 text-[#eaf2ff] hover:bg-white/30'
+                              }`}
+                            >
+                              {chip}
+                            </button>
+                          ))}
+                        </div>
                         <div className="mt-2 flex items-end gap-2">
                           <div className="flex-1">
-                            <p className="text-[10px] text-[#eaf2ff] mb-1 uppercase">Diem dat</p>
+                            <p className="mb-1 text-[10px] uppercase text-[#eaf2ff]">Điểm đặt</p>
                             <Input
                               type="number"
                               min={1}
                               value={betAmounts[item]}
-                              onChange={(e) => setBetAmounts((prev) => ({ ...prev, [item]: e.target.value }))}
+                              onChange={(e) =>
+                                setBetAmounts((prev) => ({ ...prev, [item]: e.target.value }))
+                              }
                               disabled={!canBet || betLoadingItem !== null}
-                              className="h-9 bg-white border-[#dab479]"
+                              className="h-9 border-[#dab479] bg-white"
                             />
                           </div>
                           <Button
                             onClick={() => void handlePlaceBet(item)}
                             disabled={!canBet || betLoadingItem !== null}
-                            className="h-9 bg-[#b91c1c] hover:bg-[#991b1b] text-white"
+                            className="h-9 bg-[#b91c1c] text-white hover:bg-[#991b1b]"
                           >
-                            {betLoadingItem === item ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Dat'}
+                            {betLoadingItem === item ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              'Đặt'
+                            )}
                           </Button>
                         </div>
 
                         <div className="mt-2 flex items-center justify-between text-[11px] text-[#eaf2ff]">
-                          <span>Cua ban: {myBetsByItem[item] || 0}</span>
-                          <span>Tong ban: {state.bets_summary[item] || 0}</span>
+                          <span>Của bạn: {myBetsByItem[item] || 0}</span>
+                          <span>Tổng bàn: {state.bets_summary[item] || 0}</span>
                         </div>
                       </div>
                     )

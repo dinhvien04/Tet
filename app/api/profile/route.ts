@@ -8,6 +8,15 @@ import {
 } from '@/lib/authorization'
 import { requireString, optionalString, ValidationError } from '@/lib/api/validate'
 import { hashPassword, isValidPassword, verifyPassword } from '@/lib/auth'
+import FamilyMember from '@/lib/models/FamilyMember'
+import Post from '@/lib/models/Post'
+import Reaction from '@/lib/models/Reaction'
+import Comment from '@/lib/models/Comment'
+import Photo from '@/lib/models/Photo'
+import Notification from '@/lib/models/Notification'
+import EventRsvp from '@/lib/models/EventRsvp'
+import BauCuaWallet from '@/lib/models/BauCuaWallet'
+import BauCuaBet from '@/lib/models/BauCuaBet'
 
 export async function GET() {
   try {
@@ -119,5 +128,93 @@ export async function PATCH(request: NextRequest) {
     }
     console.error('Error updating profile:', error)
     return NextResponse.json({ error: 'Không thể cập nhật hồ sơ' }, { status: 500 })
+  }
+}
+
+/**
+ * DELETE body: { confirm: "XOA TAI KHOAN" } or { confirm: "DELETE" }
+ * Soft-cleans related user data; does not delete families they created (keeps FK integrity).
+ */
+export async function DELETE(request: NextRequest) {
+  try {
+    const sessionUser = await requireUser()
+    const body = await request.json().catch(() => ({}))
+    const confirm = typeof body.confirm === 'string' ? body.confirm.trim().toUpperCase() : ''
+
+    if (confirm !== 'XOA TAI KHOAN' && confirm !== 'DELETE') {
+      return NextResponse.json(
+        {
+          error: 'Cần xác nhận bằng chuỗi XOA TAI KHOAN hoặc DELETE',
+        },
+        { status: 400 }
+      )
+    }
+
+    await connectDB()
+
+    const user = await User.findById(sessionUser.id)
+    if (!user) {
+      return NextResponse.json({ error: 'Không tìm thấy tài khoản' }, { status: 404 })
+    }
+
+    // Block if sole system admin
+    if (user.role === 'admin') {
+      const adminCount = await User.countDocuments({ role: 'admin' })
+      if (adminCount <= 1) {
+        return NextResponse.json(
+          { error: 'Không thể xóa admin hệ thống cuối cùng' },
+          { status: 400 }
+        )
+      }
+    }
+
+    // Block if sole family admin in any family
+    const adminMemberships = await FamilyMember.find({
+      userId: user._id,
+      role: 'admin',
+    })
+    for (const m of adminMemberships) {
+      const admins = await FamilyMember.countDocuments({
+        familyId: m.familyId,
+        role: 'admin',
+      })
+      if (admins <= 1) {
+        return NextResponse.json(
+          {
+            error:
+              'Bạn là admin cuối của một nhà. Hãy giao quyền admin cho người khác trước khi xóa tài khoản.',
+          },
+          { status: 400 }
+        )
+      }
+    }
+
+    const uid = user._id
+
+    await Promise.all([
+      FamilyMember.deleteMany({ userId: uid }),
+      Reaction.deleteMany({ userId: uid }),
+      Comment.deleteMany({ userId: uid }),
+      Notification.deleteMany({ userId: uid }),
+      EventRsvp.deleteMany({ userId: uid }),
+      BauCuaBet.deleteMany({ userId: uid }),
+      BauCuaWallet.deleteMany({ userId: uid }),
+      // Keep posts/photos as historical content but strip? Or delete:
+      Post.deleteMany({ userId: uid }),
+      Photo.deleteMany({ userId: uid }),
+    ])
+
+    await User.deleteOne({ _id: uid })
+
+    console.log('[audit] account.deleted', { userId: sessionUser.id })
+
+    return NextResponse.json({ success: true })
+  } catch (error) {
+    if (error instanceof AuthError) {
+      const { error: message, status } = authErrorResponse(error)
+      return NextResponse.json({ error: message }, { status })
+    }
+    console.error('Error deleting account:', error)
+    return NextResponse.json({ error: 'Không thể xóa tài khoản' }, { status: 500 })
   }
 }

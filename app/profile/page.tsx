@@ -28,6 +28,7 @@ export default function ProfilePage() {
   const [avatar, setAvatar] = useState('')
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [deleteConfirm, setDeleteConfirm] = useState('')
 
   useEffect(() => {
     ;(async () => {
@@ -62,6 +63,32 @@ export default function ProfilePage() {
       if (!res.ok) throw new Error(data.error || 'Không lưu được')
       setUser((u) => (u ? { ...u, ...data.user } : data.user))
       toast.success('Đã cập nhật hồ sơ')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Có lỗi xảy ra')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDeleteAccount = async () => {
+    if (deleteConfirm.trim().toUpperCase() !== 'XOA TAI KHOAN') {
+      toast.error('Gõ đúng XOA TAI KHOAN để xác nhận')
+      return
+    }
+    if (!window.confirm('Bạn chắc chắn muốn xóa tài khoản? Không hoàn tác được.')) {
+      return
+    }
+    setSaving(true)
+    try {
+      const res = await fetch('/api/profile', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: 'XOA TAI KHOAN' }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Không xóa được')
+      toast.success('Đã xóa tài khoản')
+      window.location.href = '/login'
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Có lỗi xảy ra')
     } finally {
@@ -182,6 +209,32 @@ export default function ProfilePage() {
                   </CardContent>
                 </Card>
               )}
+
+              <Card className="border-destructive/40">
+                <CardHeader>
+                  <CardTitle className="text-destructive">Xóa tài khoản</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    Thao tác không hoàn tác. Bạn phải không còn là admin cuối của bất kỳ nhà nào.
+                    Gõ <strong>XOA TAI KHOAN</strong> để xác nhận.
+                  </p>
+                  <Input
+                    id="delete-confirm"
+                    placeholder="XOA TAI KHOAN"
+                    value={deleteConfirm}
+                    onChange={(e) => setDeleteConfirm(e.target.value)}
+                  />
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    disabled={saving || deleteConfirm.trim().toUpperCase() !== 'XOA TAI KHOAN'}
+                    onClick={handleDeleteAccount}
+                  >
+                    Xóa vĩnh viễn tài khoản
+                  </Button>
+                </CardContent>
+              </Card>
             </>
           )}
         </div>

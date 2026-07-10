@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { Event } from '@/types/database'
-import { Calendar, MapPin, User, Plus } from 'lucide-react'
+import { Calendar, MapPin, User, Plus, Download } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TaskList } from './TaskList'
@@ -74,6 +74,19 @@ export function EventDetail({ event, familyId, currentUserId }: EventDetailProps
               <span>Tạo bởi {event.users.name}</span>
             </div>
           )}
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            onClick={() => {
+              window.location.href = `/api/events/${event.id}/ics`
+            }}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Tải lịch (.ics)
+          </Button>
         </CardContent>
       </Card>
 
