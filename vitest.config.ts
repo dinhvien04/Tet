@@ -6,6 +6,11 @@ export default defineConfig({
     globals: true,
     environment: 'happy-dom',
     setupFiles: ['./tests/setup.ts'],
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/tests/legacy-supabase/**',
+    ],
   },
   resolve: {
     alias: {

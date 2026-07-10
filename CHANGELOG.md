@@ -27,6 +27,8 @@
 - Notification mark all; event filter upcoming/past
 - Bầu Cua UI: chips, countdown, admin controls, tiếng Việt
 - Theme toggle (light/dark/system)
+- Legacy Supabase tests moved to `tests/legacy-supabase/` (excluded from default Vitest)
+- ARCHITECTURE/SECURITY docs reflect MongoDB stack
 
 ## Notes
 - Game chỉ điểm ảo — không thanh toán.
