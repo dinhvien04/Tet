@@ -1,18 +1,7 @@
 import useSWR from 'swr'
+import type { Photo } from '@/types/photo'
 
-export interface Photo {
-  id: string
-  family_id: string
-  user_id: string
-  url: string
-  uploaded_at: string
-  users?: {
-    id: string
-    name: string
-    email: string
-    avatar: string | null
-  }
-}
+export type { Photo }
 
 // Fetcher function that handles the API response format
 const fetcher = async (url: string) => {
@@ -34,43 +23,22 @@ export function usePhotos(familyId: string) {
     {
       // Photos don't change as frequently, so longer refresh interval
       refreshInterval: 60000, // 1 minute
-      
+
       // Keep previous data while fetching new data
       keepPreviousData: true,
-      
-      // Don't revalidate on focus to prevent logout
-      revalidateOnFocus: false,
-      
+
+      // Revalidate on focus for fresher data when user returns
+      revalidateOnFocus: true,
+
       // Dedupe requests within 5 seconds
       dedupingInterval: 5000,
     }
   )
 
   return {
-    photos: data || [], // Always return array
+    photos: data ?? [],
     isLoading,
     isError: error,
     mutate,
-  }
-}
-
-/**
- * Optimistically update photos cache
- */
-export function useOptimisticPhoto() {
-  return {
-    addPhoto: (familyId: string, newPhoto: Photo, mutate: any) => {
-      mutate(
-        `/api/photos?familyId=${familyId}`,
-        async (currentPhotos: Photo[] = []) => {
-          // Optimistically add the new photo at the beginning
-          return [newPhoto, ...currentPhotos]
-        },
-        {
-          // Revalidate after optimistic update to ensure consistency
-          revalidate: true,
-        }
-      )
-    },
   }
 }

@@ -125,19 +125,59 @@ export async function PATCH(request: NextRequest) {
       )
     }
 
-    if (role === 'user') {
-      const adminCount = await User.countDocuments({ role: 'admin' })
-      if (targetUser.role === 'admin' && adminCount <= 1) {
-        return NextResponse.json(
-          { error: 'Hệ thống phải còn ít nhất một admin' },
-          { status: 400 }
-        )
-      }
-    }
+    const {
+      withMongoTransaction,
+      TransactionNotSupportedError,
+    } = await import('@/lib/mongo-transaction')
+    const {
+      casDecrementSystemAdmin,
+      casIncrementSystemAdmin,
+    } = await import('@/lib/admin-invariant')
 
     const previousRole = targetUser.role
-    targetUser.role = role
-    await targetUser.save()
+
+    try {
+      await withMongoTransaction(
+        async (session) => {
+          const fresh = await User.findById(userId, null, session ? { session } : {})
+          if (!fresh) {
+            throw new AuthError('Không tìm thấy user', 404)
+          }
+
+          if (fresh.role === role) {
+            return
+          }
+
+          if (fresh.role === 'admin' && role === 'user') {
+            const ok = await casDecrementSystemAdmin(session)
+            if (!ok) {
+              throw new AuthError('Hệ thống phải còn ít nhất một admin', 400)
+            }
+          }
+
+          if (fresh.role === 'user' && role === 'admin') {
+            await casIncrementSystemAdmin(session)
+          }
+
+          fresh.role = role
+          await fresh.save(session ? { session } : undefined)
+          targetUser.role = role
+        },
+        { requireReplicaSet: true }
+      )
+    } catch (error) {
+      if (error instanceof AuthError) {
+        const { error: message, status } = authErrorResponse(error)
+        return NextResponse.json({ error: message }, { status })
+      }
+      if (error instanceof TransactionNotSupportedError) {
+        return NextResponse.json(
+          { error: 'Cần MongoDB replica set để đổi quyền admin an toàn' },
+          { status: 503 }
+        )
+      }
+      throw error
+    }
 
     console.log('[audit] admin.role_change', {
       actorId: admin.id,

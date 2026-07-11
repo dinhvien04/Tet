@@ -2,6 +2,21 @@
 
 ## Unreleased / main
 
+### Round 3 — Production hardening (2026-07)
+- Next.js 16.2.10 + NextAuth 4.24.14; removed unused `@google/generative-ai`
+- Bầu Cua: FamilyState lock (betRevision + betting→rolling CAS), start idle→starting CAS, no aborted-tx continue, reserved invariant without clamp, requireReplicaSet
+- Account delete: password required only when credentials+active; TX + StorageCleanupJob outbox
+- Family/System admin CAS locks (`FamilyAdminState`, `SystemAdminState`)
+- AI daily quota reserve-before-provider + exact bucket release
+- Rate limit: E11000 upsert retry, exact bucketKey release, hashed invite codes
+- Upload: delete Photo on post-create failure; Cloudinary cleanup enqueue; no email in DTO; max processed bytes
+- CSP: no `unsafe-eval` in production; diagnostics token ≠ CRON_SECRET
+- Cursor validation (ObjectId, size, extra fields); camelCase API DTOs; CI runs integration + audit (no `|| true`)
+- Scripts: `migration:round3:audit|apply`
+- Event/post delete cascade (tasks/RSVP/comments/reactions/notifications) in TX
+- Cron `/api/cron/storage-cleanup`; middleware skips all `/api/*`
+- Real RS integration tests (skip without Mongo); E2E protected routes when `E2E_BASE_URL` set
+
 ### P0 — Security & correctness
 - NextAuth JWT làm nguồn session; bỏ MongoDBAdapter; secret fail-safe production
 - AI: auth, validate, rate limit/quota, không lộ lỗi provider

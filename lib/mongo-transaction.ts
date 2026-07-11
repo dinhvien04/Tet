@@ -11,8 +11,15 @@ export class TransactionNotSupportedError extends Error {
 let replicaSetChecked = false
 let replicaSetSupported = false
 
+/** Test helper: clear cached capability probe after reconnect. */
+export function resetMongoTransactionCache(): void {
+  replicaSetChecked = false
+  replicaSetSupported = false
+}
+
 /**
  * Detect whether the connected deployment supports multi-document transactions.
+ * Prefer hello (no replSetGetStatus privileges required on managed MongoDB).
  */
 export async function supportsMongoTransactions(): Promise<boolean> {
   if (replicaSetChecked) return replicaSetSupported
@@ -25,7 +32,12 @@ export async function supportsMongoTransactions(): Promise<boolean> {
     } else {
       const status = await admin.command({ hello: 1 }).catch(() => null)
       replicaSetSupported = Boolean(
-        status && (status.setName || status.msg === 'isdbgrid')
+        status &&
+          (status.setName ||
+            status.msg === 'isdbgrid' ||
+            // Some managed configs expose sessions without setName in edge cases
+            (typeof status.logicalSessionTimeoutMinutes === 'number' &&
+              status.setName))
       )
     }
   } catch {

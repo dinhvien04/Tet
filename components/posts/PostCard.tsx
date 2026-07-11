@@ -13,25 +13,31 @@ interface PostUser {
   id: string
   name: string
   avatar: string | null
-  email: string
+  email?: string
 }
 
 interface PostComment {
   id: string
-  post_id: string
-  user_id: string
+  postId?: string
+  post_id?: string
+  userId?: string
+  user_id?: string
   content: string
-  created_at: string
+  createdAt?: string
+  created_at?: string
   users: PostUser
 }
 
 export interface Post {
   id: string
-  family_id: string
-  user_id: string
+  familyId?: string
+  family_id?: string
+  userId?: string
+  user_id?: string
   content: string
   type: 'cau-doi' | 'loi-chuc' | 'thiep-tet'
-  created_at: string
+  createdAt?: string
+  created_at?: string
   users: PostUser
   reactions?: {
     heart: number
@@ -152,7 +158,7 @@ export function PostCard({ post, onReaction }: PostCardProps) {
             </span>
           </div>
           <p className="text-xs md:text-sm text-muted-foreground">
-            {formatDistanceToNow(new Date(post.created_at), {
+            {formatDistanceToNow(new Date(post.createdAt || post.created_at || Date.now()), {
               addSuffix: true,
               locale: vi,
             })}
@@ -219,10 +225,13 @@ export function PostCard({ post, onReaction }: PostCardProps) {
                       <p className="text-sm font-medium">{comment.users.name}</p>
                       <p className="text-sm break-words">{comment.content}</p>
                       <p className="text-xs text-muted-foreground">
-                        {formatDistanceToNow(new Date(comment.created_at), {
+                        {formatDistanceToNow(
+                          new Date(comment.createdAt || comment.created_at || Date.now()),
+                          {
                           addSuffix: true,
                           locale: vi,
-                        })}
+                          }
+                        )}
                       </p>
                     </div>
                   </div>

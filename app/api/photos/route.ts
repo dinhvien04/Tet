@@ -11,6 +11,7 @@ import {
   decodeCursor,
   cursorFilter,
   buildNextCursor,
+  InvalidCursorError,
 } from '@/lib/api/pagination'
 
 export async function GET(request: NextRequest) {
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest) {
 
     // uploadedAt is the photo date field — use createdAt-style cursor on uploadedAt
     let query = Photo.find(filter)
-      .populate('userId', 'name email avatar')
+      .populate('userId', 'name avatar')
       .sort({ uploadedAt: -1, _id: -1 })
       .limit(limit)
 
@@ -54,7 +55,6 @@ export async function GET(request: NextRequest) {
       const user = photo.userId as unknown as {
         _id: { toString(): string }
         name: string
-        email: string
         avatar?: string | null
       }
 
@@ -64,14 +64,9 @@ export async function GET(request: NextRequest) {
         familyId: photo.familyId.toString(),
         userId: user._id.toString(),
         uploadedAt: photo.uploadedAt,
-        // legacy snake_case for older clients
-        family_id: photo.familyId.toString(),
-        user_id: user._id.toString(),
-        uploaded_at: photo.uploadedAt,
         users: {
           id: user._id.toString(),
           name: user.name,
-          email: user.email,
           avatar: user.avatar ?? null,
         },
       }
@@ -83,6 +78,9 @@ export async function GET(request: NextRequest) {
       limit,
     })
   } catch (error) {
+    if (error instanceof InvalidCursorError) {
+      return NextResponse.json({ error: error.message }, { status: 400 })
+    }
     if (error instanceof AuthError) {
       const { error: message, status } = authErrorResponse(error)
       return NextResponse.json({ error: message }, { status })

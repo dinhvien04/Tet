@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { AuthError, authErrorResponse, requireUser } from '@/lib/authorization'
-import { checkDailyQuota, checkRateLimit } from '@/lib/rate-limit'
+import {
+  checkDailyQuota,
+  checkRateLimit,
+  releaseDailyQuota,
+} from '@/lib/rate-limit'
 
 const VALID_TYPES = ['cau-doi', 'loi-chuc', 'thiep-tet'] as const
 type ContentType = (typeof VALID_TYPES)[number]
@@ -68,6 +72,9 @@ function buildPrompt(type: ContentType, recipientName: string, traits: string): 
 }
 
 export async function POST(request: NextRequest) {
+  let dailyBucketKey: string | null = null
+  let dailyReserved = false
+
   try {
     const user = await requireUser()
     const body = await request.json()
@@ -82,7 +89,10 @@ export async function POST(request: NextRequest) {
     })
     if (!userRate.allowed) {
       return NextResponse.json(
-        { error: 'Bạn đã gửi quá nhiều yêu cầu. Vui lòng thử lại sau.' },
+        {
+          error: 'Bạn đã gửi quá nhiều yêu cầu. Vui lòng thử lại sau.',
+          retryAfterSeconds: userRate.retryAfterSeconds,
+        },
         {
           status: 429,
           headers: { 'Retry-After': String(userRate.retryAfterSeconds) },
@@ -97,7 +107,10 @@ export async function POST(request: NextRequest) {
     })
     if (!ipRate.allowed) {
       return NextResponse.json(
-        { error: 'Quá nhiều yêu cầu từ địa chỉ này. Vui lòng thử lại sau.' },
+        {
+          error: 'Quá nhiều yêu cầu từ địa chỉ này. Vui lòng thử lại sau.',
+          retryAfterSeconds: ipRate.retryAfterSeconds,
+        },
         {
           status: 429,
           headers: { 'Retry-After': String(ipRate.retryAfterSeconds) },
@@ -105,20 +118,27 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Peek successful usage (do not increment until provider succeeds)
-    const { default: RateLimit } = await import('@/lib/models/RateLimit')
-    const { connectDB } = await import('@/lib/mongodb')
-    await connectDB()
-    const dayMs = 24 * 60 * 60 * 1000
-    const windowStartMs = Date.now() - (Date.now() % dayMs)
-    const successKey = `ai:success:${user.id}:${windowStartMs}`
-    const successRecord = await RateLimit.findOne({ key: successKey }).lean()
-    if (successRecord && successRecord.count >= DAILY_QUOTA) {
+    // Atomic daily quota reservation BEFORE calling provider
+    const daily = await checkDailyQuota({
+      key: `ai:success:${user.id}`,
+      limit: DAILY_QUOTA,
+    })
+    if (!daily.allowed) {
+      // Release the over-limit increment
+      await releaseDailyQuota({ bucketKey: daily.bucketKey })
       return NextResponse.json(
-        { error: 'Bạn đã hết hạn mức AI trong ngày. Vui lòng quay lại vào ngày mai.' },
-        { status: 429 }
+        {
+          error: 'Bạn đã hết hạn mức AI trong ngày. Vui lòng quay lại vào ngày mai.',
+          retryAfterSeconds: daily.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(daily.retryAfterSeconds) },
+        }
       )
     }
+    dailyBucketKey = daily.bucketKey
+    dailyReserved = true
 
     const apiKey = process.env.MEGALLM_API_KEY
     const model = process.env.MEGALLM_MODEL
@@ -164,8 +184,14 @@ export async function POST(request: NextRequest) {
 
       if (response.status === 429) {
         return NextResponse.json(
-          { error: 'Nhà cung cấp AI đang quá tải. Vui lòng thử lại sau.' },
-          { status: 429 }
+          {
+            error: 'Nhà cung cấp AI đang quá tải. Vui lòng thử lại sau.',
+            retryAfterSeconds: 30,
+          },
+          {
+            status: 429,
+            headers: { 'Retry-After': '30' },
+          }
         )
       }
 
@@ -190,46 +216,45 @@ export async function POST(request: NextRequest) {
         )
       }
 
-      // Increment successful usage only after valid content
-      const daily = await checkDailyQuota({
-        key: `ai:success:${user.id}`,
-        limit: DAILY_QUOTA,
-      })
+      // Keep reservation — successful usage
+      dailyReserved = false
 
       console.log('[ai] usage', {
         userId: user.id,
         type,
-        totalTokens: data.usage?.total_tokens ?? null,
+        tokens: data.usage?.total_tokens,
+        quota: daily.count,
       })
 
       return NextResponse.json({
+        success: true,
         content,
-        usage: {
-          remainingToday: daily.remaining,
-        },
+        type,
+        remaining: daily.remaining,
       })
     } finally {
       clearTimeout(timeoutId)
     }
-  } catch (error: unknown) {
+  } catch (error) {
     if (error instanceof AuthError) {
       const { error: message, status } = authErrorResponse(error)
       return NextResponse.json({ error: message }, { status })
     }
-
-    const err = error as { name?: string; message?: string }
-
-    if (err.name === 'AbortError' || err.message?.includes('timeout')) {
+    if (error instanceof Error && error.name === 'AbortError') {
       return NextResponse.json(
-        { error: 'Yêu cầu quá lâu. Vui lòng thử lại.' },
+        { error: 'Dịch vụ AI phản hồi quá chậm. Vui lòng thử lại.' },
         { status: 504 }
       )
     }
-
-    console.error('[ai] error', { name: err.name })
-    return NextResponse.json(
-      { error: 'Dịch vụ AI tạm thời gặp sự cố. Vui lòng thử lại.' },
-      { status: 500 }
-    )
+    console.error('[ai] generate error', error)
+    return NextResponse.json({ error: 'Không thể tạo nội dung AI' }, { status: 500 })
+  } finally {
+    if (dailyReserved && dailyBucketKey) {
+      try {
+        await releaseDailyQuota({ bucketKey: dailyBucketKey })
+      } catch (e) {
+        console.error('[ai] failed to release daily quota', e)
+      }
+    }
   }
 }

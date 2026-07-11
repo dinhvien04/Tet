@@ -14,7 +14,8 @@ import {
 import { toast } from 'sonner'
 
 interface FamilyMemberOption {
-  user_id: string
+  userId?: string
+  user_id?: string
   name?: string
   users?: { id: string; name: string }
 }
@@ -116,8 +117,10 @@ export function AssignTaskForm({ eventId, familyId, onTaskCreated }: AssignTaskF
           <SelectContent>
             {members.map((member) => {
               const memberName = member.name || member.users?.name || 'Thanh vien'
+              const uid = member.userId || member.user_id || member.users?.id || ''
+              if (!uid) return null
               return (
-                <SelectItem key={member.user_id} value={member.user_id}>
+                <SelectItem key={uid} value={uid}>
                   {memberName}
                 </SelectItem>
               )

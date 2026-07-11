@@ -106,11 +106,41 @@ export async function DELETE(
       )
     }
 
-    await Promise.all([
-      Reaction.deleteMany({ postId: post._id }),
-      Comment.deleteMany({ postId: post._id }),
-      Post.deleteOne({ _id: post._id }),
-    ])
+    const {
+      withMongoTransaction,
+      TransactionNotSupportedError,
+    } = await import('@/lib/mongo-transaction')
+    const Notification = (await import('@/lib/models/Notification')).default
+
+    const postIdStr = post._id.toString()
+    try {
+      await withMongoTransaction(
+        async (session) => {
+          const opt = session ? { session } : {}
+          await Reaction.deleteMany({ postId: post._id }, opt)
+          await Comment.deleteMany({ postId: post._id }, opt)
+          await Notification.deleteMany(
+            {
+              $or: [
+                { link: { $regex: postIdStr } },
+                { dedupeKey: { $regex: postIdStr } },
+              ],
+            },
+            opt
+          )
+          await Post.deleteOne({ _id: post._id }, opt)
+        },
+        { requireReplicaSet: true }
+      )
+    } catch (error) {
+      if (error instanceof TransactionNotSupportedError) {
+        return NextResponse.json(
+          { error: 'Cần MongoDB replica set để xóa bài an toàn' },
+          { status: 503 }
+        )
+      }
+      throw error
+    }
 
     return NextResponse.json({ success: true })
   } catch (error) {

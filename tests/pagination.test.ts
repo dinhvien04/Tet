@@ -6,6 +6,7 @@ import {
   cursorFilter,
   DEFAULT_PAGE_LIMIT,
   MAX_PAGE_LIMIT,
+  InvalidCursorError,
 } from '@/lib/api/pagination'
 
 describe('pagination helpers', () => {
@@ -26,9 +27,34 @@ describe('pagination helpers', () => {
     expect(decoded?.id).toBe('507f1f77bcf86cd799439011')
   })
 
-  it('rejects invalid cursor', () => {
-    expect(decodeCursor('not-valid')).toBeNull()
+  it('rejects invalid cursor with 400-class error in strict mode', () => {
+    expect(() => decodeCursor('not-valid')).toThrow(InvalidCursorError)
     expect(decodeCursor('')).toBeNull()
+    expect(decodeCursor(null)).toBeNull()
+  })
+
+  it('rejects non-ObjectId cursor id', () => {
+    const bad = Buffer.from(
+      JSON.stringify({ createdAt: '2026-01-15T10:00:00.000Z', id: 'not-an-oid' }),
+      'utf8'
+    ).toString('base64url')
+    expect(() => decodeCursor(bad)).toThrow(InvalidCursorError)
+  })
+
+  it('rejects extra fields', () => {
+    const bad = Buffer.from(
+      JSON.stringify({
+        createdAt: '2026-01-15T10:00:00.000Z',
+        id: '507f1f77bcf86cd799439011',
+        evil: true,
+      }),
+      'utf8'
+    ).toString('base64url')
+    expect(() => decodeCursor(bad)).toThrow(InvalidCursorError)
+  })
+
+  it('non-strict mode returns null for invalid', () => {
+    expect(decodeCursor('not-valid', { strict: false })).toBeNull()
   })
 
   it('builds cursor filter', () => {

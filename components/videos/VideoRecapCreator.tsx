@@ -17,10 +17,13 @@ interface PhotoUser {
 
 interface Photo {
   id: string
-  family_id: string
-  user_id: string
+  familyId?: string
+  family_id?: string
+  userId?: string
+  user_id?: string
   url: string
-  uploaded_at: string
+  uploadedAt?: string
+  uploaded_at?: string
   users?: PhotoUser
 }
 

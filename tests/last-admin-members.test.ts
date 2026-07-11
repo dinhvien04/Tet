@@ -7,10 +7,11 @@ const mockRequireFamilyMember = vi.hoisted(() => vi.fn())
 const mockRequireUser = vi.hoisted(() => vi.fn())
 const mockWithTx = vi.hoisted(() => vi.fn())
 const mockFindOne = vi.hoisted(() => vi.fn())
-const mockCount = vi.hoisted(() => vi.fn())
 const mockSave = vi.hoisted(() => vi.fn())
 const mockPopulate = vi.hoisted(() => vi.fn())
 const mockDeleteOne = vi.hoisted(() => vi.fn())
+const mockCasDec = vi.hoisted(() => vi.fn())
+const mockCasInc = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/authorization', () => {
   class AuthError extends Error {
@@ -47,10 +48,14 @@ vi.mock('@/lib/mongo-transaction', () => ({
   withMongoTransaction: (fn: (s: undefined) => Promise<unknown>) => mockWithTx(fn),
 }))
 
+vi.mock('@/lib/admin-invariant', () => ({
+  casDecrementFamilyAdmin: (...a: unknown[]) => mockCasDec(...a),
+  casIncrementFamilyAdmin: (...a: unknown[]) => mockCasInc(...a),
+}))
+
 vi.mock('@/lib/models/FamilyMember', () => ({
   default: {
     findOne: (...a: unknown[]) => mockFindOne(...a),
-    countDocuments: (...a: unknown[]) => mockCount(...a),
     deleteOne: (...a: unknown[]) => mockDeleteOne(...a),
     find: vi.fn(),
   },
@@ -66,8 +71,9 @@ describe('last-admin invariant', () => {
     vi.clearAllMocks()
     mockRequireFamilyAdmin.mockResolvedValue({})
     mockRequireUser.mockResolvedValue({ id: '507f1f77bcf86cd799439099' })
-    // Run transaction callback with no session
     mockWithTx.mockImplementation(async (fn: (s: undefined) => Promise<unknown>) => fn(undefined))
+    mockCasDec.mockResolvedValue(true)
+    mockCasInc.mockResolvedValue(undefined)
   })
 
   it('refuses demoting the only admin', async () => {
@@ -77,7 +83,6 @@ describe('last-admin invariant', () => {
       userId: {
         _id: { toString: () => MEMBER },
         name: 'A',
-        email: 'a@b.c',
       },
       joinedAt: new Date(),
       save: mockSave,
@@ -86,7 +91,7 @@ describe('last-admin invariant', () => {
     mockFindOne.mockReturnValue({
       populate: async () => target,
     })
-    mockCount.mockResolvedValue(1)
+    mockCasDec.mockResolvedValue(false)
     mockSave.mockResolvedValue(target)
     mockPopulate.mockResolvedValue(target)
 
@@ -105,14 +110,13 @@ describe('last-admin invariant', () => {
     expect(mockSave).not.toHaveBeenCalled()
   })
 
-  it('allows demote when another admin exists', async () => {
+  it('allows demote when CAS succeeds (another admin exists)', async () => {
     const target = {
       _id: MEMBER,
       role: 'admin',
       userId: {
         _id: { toString: () => MEMBER },
         name: 'A',
-        email: 'a@b.c',
       },
       joinedAt: new Date(),
       save: mockSave.mockImplementation(async function (this: { role: string }) {
@@ -126,7 +130,7 @@ describe('last-admin invariant', () => {
     mockFindOne.mockReturnValue({
       populate: async () => target,
     })
-    mockCount.mockResolvedValue(2)
+    mockCasDec.mockResolvedValue(true)
 
     const res = await PATCH(
       new NextRequest('http://localhost/api/families/x/members', {
@@ -139,6 +143,7 @@ describe('last-admin invariant', () => {
 
     expect(res.status).toBe(200)
     expect(mockSave).toHaveBeenCalled()
+    expect(mockCasDec).toHaveBeenCalled()
   })
 
   it('refuses deleting the only admin', async () => {
@@ -147,12 +152,12 @@ describe('last-admin invariant', () => {
       role: 'admin',
       userId: { toString: () => MEMBER },
     })
-    mockCount.mockResolvedValue(1)
+    mockCasDec.mockResolvedValue(false)
 
     const res = await DELETE(
-      new NextRequest(
-        `http://localhost/api/families/${FAMILY}/members?memberId=${MEMBER}`
-      ),
+      new NextRequest(`http://localhost/api/families/x/members?memberId=${MEMBER}`, {
+        method: 'DELETE',
+      }),
       { params: Promise.resolve({ id: FAMILY }) }
     )
 

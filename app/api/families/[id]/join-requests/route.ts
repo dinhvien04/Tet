@@ -7,7 +7,6 @@ import {
   authErrorResponse,
   parseObjectId,
   requireFamilyAdmin,
-  requireUser,
 } from '@/lib/authorization'
 
 /** GET pending (and optional all) join requests — family admin */

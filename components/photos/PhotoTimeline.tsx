@@ -2,22 +2,8 @@
 
 import { useMemo } from 'react'
 import { PhotoGrid } from './PhotoGrid'
-
-interface PhotoUser {
-  id: string
-  name: string
-  email?: string
-  avatar?: string | null
-}
-
-interface Photo {
-  id: string
-  family_id: string
-  user_id: string
-  url: string
-  uploaded_at: string
-  users?: PhotoUser
-}
+import type { Photo } from '@/types/photo'
+import { photoUploadedAt } from '@/types/photo'
 
 interface PhotoTimelineProps {
   photos: Photo[]
@@ -34,7 +20,7 @@ export function PhotoTimeline({ photos, onPhotoClick }: PhotoTimelineProps) {
     const grouped: GroupedPhotos = {}
     
     photos.forEach(photo => {
-      const date = new Date(photo.uploaded_at).toLocaleDateString('vi-VN', {
+      const date = new Date(photoUploadedAt(photo)).toLocaleDateString('vi-VN', {
         year: 'numeric',
         month: 'long',
         day: 'numeric'
@@ -54,8 +40,8 @@ export function PhotoTimeline({ photos, onPhotoClick }: PhotoTimelineProps) {
   const sortedDates = useMemo(() => {
     return Object.keys(groupedPhotos).sort((a, b) => {
       // Parse Vietnamese date format back to compare
-      const dateA = groupedPhotos[a][0].uploaded_at
-      const dateB = groupedPhotos[b][0].uploaded_at
+      const dateA = photoUploadedAt(groupedPhotos[a][0])
+      const dateB = photoUploadedAt(groupedPhotos[b][0])
       return new Date(dateB).getTime() - new Date(dateA).getTime()
     })
   }, [groupedPhotos])

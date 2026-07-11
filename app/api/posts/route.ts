@@ -38,16 +38,14 @@ export async function POST(request: NextRequest) {
       content,
       type,
     })
-    await post.populate('userId', 'name email avatar')
+    await post.populate('userId', 'name avatar')
 
     const author = post.userId as unknown as {
       _id: { toString(): string }
       name: string
-      email: string
       avatar?: string
     }
 
-    // camelCase primary; snake_case kept for legacy client types during migration
     return NextResponse.json({
       success: true,
       post: {
@@ -57,16 +55,12 @@ export async function POST(request: NextRequest) {
         content: post.content,
         type: post.type,
         createdAt: post.createdAt,
-        family_id: post.familyId.toString(),
-        user_id: author._id.toString(),
-        created_at: post.createdAt,
         reactions: { heart: 0, haha: 0 },
         userReaction: null,
         commentsCount: 0,
         users: {
           id: author._id.toString(),
           name: author.name,
-          email: author.email,
           avatar: author.avatar ?? null,
         },
       },
@@ -111,7 +105,7 @@ export async function GET(request: NextRequest) {
     }
 
     let query = Post.find(filter)
-      .populate('userId', 'name email avatar')
+      .populate('userId', 'name avatar')
       .sort({ createdAt: -1, _id: -1 })
       .limit(limit)
 
@@ -181,7 +175,6 @@ export async function GET(request: NextRequest) {
       const author = postDoc.userId as unknown as {
         _id: { toString(): string }
         name: string
-        email: string
         avatar?: string
       }
       const id = postDoc._id.toString()
@@ -195,17 +188,12 @@ export async function GET(request: NextRequest) {
         content: postDoc.content,
         type: postDoc.type,
         createdAt: postDoc.createdAt,
-        // legacy aliases
-        family_id: familyIdStr,
-        user_id: userIdStr,
-        created_at: postDoc.createdAt,
         reactions: reactionCountMap.get(id) || { heart: 0, haha: 0 },
         userReaction: userReactionMap.get(id) || null,
         commentsCount: commentsCountMap.get(id) || 0,
         users: {
           id: userIdStr,
           name: author.name,
-          email: author.email,
           avatar: author.avatar ?? null,
         },
       }
@@ -225,6 +213,7 @@ export async function GET(request: NextRequest) {
       const { error: message, status } = validationErrorResponse(error)
       return NextResponse.json({ error: message }, { status })
     }
+    // InvalidCursorError extends ValidationError
     console.error('Error fetching posts:', error)
     return NextResponse.json({ error: 'Không thể lấy danh sách bài đăng' }, { status: 500 })
   }

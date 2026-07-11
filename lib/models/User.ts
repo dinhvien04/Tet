@@ -36,9 +36,9 @@ const UserSchema = new Schema<IUser>(
     },
     password: {
       type: String,
-      // Required only for credentials provider
-      required: function(this: IUser) {
-        return this.provider === 'credentials'
+      // Required only for active credentials accounts (not soft-deleted)
+      required: function (this: IUser) {
+        return this.provider === 'credentials' && this.status === 'active'
       },
     },
     name: {

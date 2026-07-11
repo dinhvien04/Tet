@@ -36,11 +36,16 @@ vi.mock('@/lib/models/Photo', () => ({
   default: {
     create: (...a: unknown[]) => mockPhotoCreate(...a),
     countDocuments: (...a: unknown[]) => mockPhotoCount(...a),
+    deleteOne: vi.fn(async () => ({})),
   },
 }))
 vi.mock('@/lib/rate-limit', () => ({
   checkDailyQuota: (...a: unknown[]) => mockCheckDailyQuota(...a),
   releaseDailyQuota: (...a: unknown[]) => mockReleaseDailyQuota(...a),
+}))
+vi.mock('@/lib/storage-cleanup', () => ({
+  destroyCloudinaryOrEnqueue: vi.fn(async () => ({ destroyed: true, enqueued: false })),
+  enqueueStorageCleanup: vi.fn(async () => undefined),
 }))
 vi.mock('@/lib/cloudinary', () => ({
   default: {
@@ -89,6 +94,9 @@ describe('POST /api/photos/upload', () => {
       remaining: 49,
       retryAfterSeconds: 1,
       count: 1,
+      bucketKey: 'upload:user:u1:0',
+      reservationId: 'r1',
+      windowStartMs: 0,
     })
     mockReleaseDailyQuota.mockResolvedValue(undefined)
     mockPhotoCreate.mockImplementation(async (doc: Record<string, unknown>) => {
@@ -98,7 +106,6 @@ describe('POST /api/photos/upload', () => {
         userId: {
           _id: { toString: () => '507f1f77bcf86cd799439011' },
           name: 'Test',
-          email: 't@example.com',
           avatar: null,
         },
         url: '/uploads/x.jpg',
@@ -108,7 +115,6 @@ describe('POST /api/photos/upload', () => {
           return this
         },
       }
-      // Assign userId object after create for populate
       void doc
       return photo
     })
@@ -136,11 +142,17 @@ describe('POST /api/photos/upload', () => {
       remaining: 0,
       retryAfterSeconds: 3600,
       count: 51,
+      bucketKey: 'upload:user:u1:0',
+      reservationId: 'r1',
+      windowStartMs: 0,
     })
     const file = await jpegFile()
     const res = await POST(formRequest(file, '507f1f77bcf86cd799439012'))
     expect(res.status).toBe(429)
-    expect(mockReleaseDailyQuota).not.toHaveBeenCalled()
+    // Over-limit increment is released
+    expect(mockReleaseDailyQuota).toHaveBeenCalledWith({
+      bucketKey: 'upload:user:u1:0',
+    })
   })
 
   it('returns 400 for non-image content', async () => {
@@ -150,7 +162,7 @@ describe('POST /api/photos/upload', () => {
     expect(mockReleaseDailyQuota).toHaveBeenCalled()
   })
 
-  it('uploads valid JPEG and returns photo with dimensions', async () => {
+  it('uploads valid JPEG and returns photo with dimensions (no email in DTO)', async () => {
     const file = await jpegFile('ok.jpg', 80, 60)
     const res = await POST(formRequest(file, '507f1f77bcf86cd799439012'))
     expect(res.status).toBe(200)
@@ -158,9 +170,40 @@ describe('POST /api/photos/upload', () => {
     expect(data.success).toBe(true)
     expect(data.photo.width).toBe(80)
     expect(data.photo.height).toBe(60)
+    expect(data.photo.uploader.email).toBeUndefined()
     expect(mockPhotoCreate).toHaveBeenCalled()
     // success keeps quota
     expect(mockReleaseDailyQuota).not.toHaveBeenCalled()
+  })
+
+  it('deletes Photo doc when populate fails after create', async () => {
+    const mockDeleteOne = vi.fn(async () => ({}))
+    const Photo = (await import('@/lib/models/Photo')).default as {
+      create: typeof mockPhotoCreate
+      deleteOne: typeof mockDeleteOne
+    }
+    // Attach deleteOne on mocked default
+    ;(Photo as { deleteOne?: typeof mockDeleteOne }).deleteOne = mockDeleteOne
+
+    mockPhotoCreate.mockImplementation(async () => {
+      const photo = {
+        _id: { toString: () => '507f1f77bcf86cd799439099' },
+        familyId: { toString: () => '507f1f77bcf86cd799439012' },
+        userId: '507f1f77bcf86cd799439011',
+        url: '/uploads/x.jpg',
+        publicId: 'local:uploads/x.jpg',
+        uploadedAt: new Date(),
+        populate: async () => {
+          throw new Error('populate failed')
+        },
+      }
+      return photo
+    })
+
+    const file = await jpegFile()
+    const res = await POST(formRequest(file, '507f1f77bcf86cd799439012'))
+    expect(res.status).toBe(500)
+    expect(mockReleaseDailyQuota).toHaveBeenCalled()
   })
 
   it('releases quota when DB create fails', async () => {

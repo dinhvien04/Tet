@@ -52,7 +52,9 @@ export default withAuth(
 )
 
 export const config = {
+  // Skip API routes (they enforce auth server-side), static assets, and images.
+  // Auth pages and public landing still get CSP via this middleware when matched.
   matcher: [
-    '/((?!api/auth|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!api/|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|css|map|woff2?)$).*)',
   ],
 }

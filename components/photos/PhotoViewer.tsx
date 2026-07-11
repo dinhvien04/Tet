@@ -5,21 +5,8 @@ import Image from 'next/image'
 import { X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useSwipeGesture } from '@/lib/hooks/useSwipeGesture'
 
-interface PhotoUser {
-  id: string
-  name: string
-  email?: string
-  avatar?: string | null
-}
-
-interface Photo {
-  id: string
-  family_id: string
-  user_id: string
-  url: string
-  uploaded_at: string
-  users?: PhotoUser
-}
+import type { Photo } from '@/types/photo'
+import { photoUploadedAt } from '@/types/photo'
 
 interface PhotoViewerProps {
   photos: Photo[]
@@ -103,7 +90,7 @@ export function PhotoViewer({ photos, currentIndex, onClose, onNavigate }: Photo
             {currentPhoto.users?.name || 'Unknown'}
           </p>
           <p className="text-gray-300 text-sm">
-            {formatTime(currentPhoto.uploaded_at)}
+            {formatTime(photoUploadedAt(currentPhoto))}
           </p>
         </div>
         

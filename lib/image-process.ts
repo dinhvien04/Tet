@@ -8,6 +8,8 @@
 import sharp from 'sharp'
 
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+/** Reject re-encoded output larger than this (PNG can expand). */
+export const MAX_PROCESSED_BYTES = MAX_UPLOAD_BYTES
 export const MAX_PIXELS = 40_000_000
 export const MAX_DIMENSION = 16_384
 /** Animated formats: only first frame accepted (pages/delay frames). */
@@ -90,7 +92,32 @@ export async function processUploadImage(
 
   try {
     if (preferPng) {
-      const buffer = await pipeline.png({ compressionLevel: 8, effort: 4 }).toBuffer()
+      let buffer = await pipeline.png({ compressionLevel: 8, effort: 4 }).toBuffer()
+      // PNG can expand; fall back to JPEG if over limit
+      if (buffer.length > MAX_PROCESSED_BYTES) {
+        buffer = await sharp(input, {
+          failOn: 'error',
+          limitInputPixels: MAX_PIXELS,
+          animated: false,
+          pages: 1,
+        })
+          .rotate()
+          .jpeg({ quality: 80, mozjpeg: true })
+          .toBuffer()
+        if (buffer.length > MAX_PROCESSED_BYTES) {
+          throw new ImageProcessError(
+            'Ảnh sau xử lý vẫn quá lớn. Vui lòng giảm kích thước hoặc chất lượng.'
+          )
+        }
+        const outMeta = await sharp(buffer).metadata()
+        return {
+          buffer,
+          mime: 'image/jpeg',
+          width: outMeta.width ?? meta.width!,
+          height: outMeta.height ?? meta.height!,
+          format: 'jpeg',
+        }
+      }
       const outMeta = await sharp(buffer).metadata()
       return {
         buffer,
@@ -104,6 +131,11 @@ export async function processUploadImage(
     const buffer = await pipeline
       .jpeg({ quality: 85, mozjpeg: true })
       .toBuffer()
+    if (buffer.length > MAX_PROCESSED_BYTES) {
+      throw new ImageProcessError(
+        'Ảnh sau xử lý vẫn quá lớn. Vui lòng giảm kích thước hoặc chất lượng.'
+      )
+    }
     const outMeta = await sharp(buffer).metadata()
     return {
       buffer,
@@ -113,6 +145,7 @@ export async function processUploadImage(
       format: 'jpeg',
     }
   } catch (err) {
+    if (err instanceof ImageProcessError) throw err
     const msg = err instanceof Error ? err.message : ''
     if (/Input image exceeds pixel limit|pixel limit/i.test(msg)) {
       throw new ImageProcessError('Ảnh vượt giới hạn số pixel cho phép')

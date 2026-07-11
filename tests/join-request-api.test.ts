@@ -36,6 +36,7 @@ vi.mock('@/lib/authorization', () => {
 vi.mock('@/lib/mongodb', () => ({ connectDB: vi.fn(async () => ({})) }))
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: (...a: unknown[]) => mockRate(...a),
+  hashRateLimitSecret: (s: string) => `hash:${s}`,
 }))
 vi.mock('@/lib/models/Family', () => ({
   default: {
@@ -62,7 +63,15 @@ import { POST } from '@/app/api/families/[id]/join/route'
 describe('POST /api/families/[id]/join', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockRate.mockResolvedValue({ allowed: true, remaining: 5, retryAfterSeconds: 60 })
+    mockRate.mockResolvedValue({
+      allowed: true,
+      remaining: 5,
+      retryAfterSeconds: 60,
+      bucketKey: 'join:test:0',
+      reservationId: 'r',
+      windowStartMs: 0,
+      count: 1,
+    })
   })
 
   it('creates pending request when approval required', async () => {

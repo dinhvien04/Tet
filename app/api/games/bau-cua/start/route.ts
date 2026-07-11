@@ -33,99 +33,132 @@ export async function POST(request: NextRequest) {
     await connectDB()
 
     try {
-      const result = await withMongoTransaction(async (session) => {
-        const q = <T>(query: T): T => {
-          if (
-            session &&
-            query &&
-            typeof (query as unknown as { session?: unknown }).session === 'function'
-          ) {
-            return (query as unknown as { session: (s: typeof session) => T }).session(
-              session
-            )
-          }
-          return query
-        }
+      const result = await withMongoTransaction(
+        async (session) => {
+          const opt = session ? { session } : {}
 
-        let state = await q(BauCuaFamilyState.findOne({ familyId }))
-        if (!state) {
-          try {
-            await BauCuaFamilyState.create(
-              [
-                {
-                  familyId,
-                  activeRoundId: null,
-                  status: 'idle',
-                  version: 0,
-                  updatedAt: new Date(),
-                },
-              ],
-              session ? { session } : undefined
-            )
-          } catch {
-            // concurrent create
-          }
-          state = await q(BauCuaFamilyState.findOne({ familyId }))
-        }
-
-        if (state?.status === 'betting' || state?.status === 'rolling') {
-          const active = state.activeRoundId
-            ? await q(BauCuaRound.findById(state.activeRoundId))
-            : await q(
-                BauCuaRound.findOne({
-                  familyId,
-                  status: { $in: ['betting', 'rolling'] },
-                }).sort({ roundNumber: -1 })
+          // Ensure state document exists
+          let state = await BauCuaFamilyState.findOne({ familyId }, null, opt)
+          if (!state) {
+            try {
+              await BauCuaFamilyState.create(
+                [
+                  {
+                    familyId,
+                    activeRoundId: null,
+                    status: 'idle',
+                    version: 0,
+                    betRevision: 0,
+                    updatedAt: new Date(),
+                  },
+                ],
+                session ? { session } : undefined
               )
+            } catch (err: unknown) {
+              const e = err as { code?: number }
+              if (e.code !== 11000) throw err
+            }
+            state = await BauCuaFamilyState.findOne({ familyId }, null, opt)
+          }
 
-          if (active) {
-            return {
-              existing: true as const,
-              round: active,
+          // Return existing active round idempotently
+          if (
+            state &&
+            (state.status === 'betting' ||
+              state.status === 'rolling' ||
+              state.status === 'starting')
+          ) {
+            const active = state.activeRoundId
+              ? await BauCuaRound.findById(state.activeRoundId, null, opt)
+              : await BauCuaRound.findOne(
+                  { familyId, status: { $in: ['betting', 'rolling'] } },
+                  null,
+                  { ...opt, sort: { roundNumber: -1 } }
+                )
+
+            if (active) {
+              return { existing: true as const, round: active }
             }
           }
-        }
 
-        const latestRound = await q(
-          BauCuaRound.findOne({ familyId }).sort({ roundNumber: -1 })
-        )
-        const nextNumber = latestRound ? latestRound.roundNumber + 1 : 1
-        const now = new Date()
-
-        const [newRound] = await BauCuaRound.create(
-          [
+          // CAS: idle → starting (write conflict for concurrent starts)
+          const claimed = await BauCuaFamilyState.findOneAndUpdate(
             {
               familyId,
-              roundNumber: nextNumber,
-              status: 'betting',
-              hostUserId: user.id,
-              bettingClosesAt: new Date(now.getTime() + BETTING_WINDOW_MS),
-              settlementCompleted: false,
-              startedAt: now,
+              status: 'idle',
+              version: state?.version ?? 0,
             },
-          ],
-          session ? { session } : undefined
-        )
-
-        await BauCuaFamilyState.findOneAndUpdate(
-          { familyId },
-          {
-            $set: {
-              activeRoundId: newRound._id,
-              status: 'betting',
-              updatedAt: now,
+            {
+              $set: { status: 'starting', updatedAt: new Date() },
+              $inc: { version: 1 },
             },
-            $inc: { version: 1 },
-          },
-          { upsert: true, ...(session ? { session } : {}) }
-        )
+            { new: true, ...opt }
+          )
 
-        return { existing: false as const, round: newRound }
-      })
+          if (!claimed) {
+            // Concurrent start won — return their round
+            const current = await BauCuaFamilyState.findOne({ familyId }, null, opt)
+            if (current?.activeRoundId) {
+              const active = await BauCuaRound.findById(current.activeRoundId, null, opt)
+              if (active) {
+                return { existing: true as const, round: active }
+              }
+            }
+            const open = await BauCuaRound.findOne(
+              { familyId, status: { $in: ['betting', 'rolling'] } },
+              null,
+              { ...opt, sort: { roundNumber: -1 } }
+            )
+            if (open) {
+              return { existing: true as const, round: open }
+            }
+            throw new AuthError('Không thể mở ván — trạng thái game đang thay đổi', 409)
+          }
+
+          const latestRound = await BauCuaRound.findOne({ familyId }, null, {
+            ...opt,
+            sort: { roundNumber: -1 },
+          })
+          const nextNumber = latestRound ? latestRound.roundNumber + 1 : 1
+          const now = new Date()
+
+          const [newRound] = await BauCuaRound.create(
+            [
+              {
+                familyId,
+                roundNumber: nextNumber,
+                status: 'betting',
+                hostUserId: user.id,
+                bettingClosesAt: new Date(now.getTime() + BETTING_WINDOW_MS),
+                settlementCompleted: false,
+                startedAt: now,
+              },
+            ],
+            session ? { session } : undefined
+          )
+
+          await BauCuaFamilyState.findOneAndUpdate(
+            { familyId, status: 'starting' },
+            {
+              $set: {
+                activeRoundId: newRound._id,
+                status: 'betting',
+                updatedAt: now,
+              },
+              $inc: { version: 1 },
+            },
+            opt
+          )
+
+          return { existing: false as const, round: newRound }
+        },
+        { requireReplicaSet: true }
+      )
 
       const round = result.round
       return NextResponse.json({
         success: true,
+        idempotent: result.existing,
         round: {
           id: round._id.toString(),
           roundNumber: round.roundNumber,
@@ -136,6 +169,10 @@ export async function POST(request: NextRequest) {
         },
       })
     } catch (error) {
+      if (error instanceof AuthError) {
+        const { error: message, status } = authErrorResponse(error)
+        return NextResponse.json({ error: message }, { status })
+      }
       if (error instanceof TransactionNotSupportedError) {
         return NextResponse.json(
           {
@@ -144,6 +181,28 @@ export async function POST(request: NextRequest) {
           },
           { status: 503 }
         )
+      }
+      // Duplicate round number race — return existing
+      const e = error as { code?: number }
+      if (e.code === 11000) {
+        const open = await BauCuaRound.findOne({
+          familyId,
+          status: { $in: ['betting', 'rolling'] },
+        }).sort({ roundNumber: -1 })
+        if (open) {
+          return NextResponse.json({
+            success: true,
+            idempotent: true,
+            round: {
+              id: open._id.toString(),
+              roundNumber: open.roundNumber,
+              status: open.status,
+              hostUserId: open.hostUserId?.toString(),
+              bettingClosesAt: open.bettingClosesAt,
+              startedAt: open.startedAt,
+            },
+          })
+        }
       }
       throw error
     }

@@ -1,9 +1,9 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
 import Family from '@/lib/models/Family'
 import FamilyMember from '@/lib/models/FamilyMember'
 import FamilyJoinRequest from '@/lib/models/FamilyJoinRequest'
-import { checkRateLimit } from '@/lib/rate-limit'
+import { checkRateLimit, hashRateLimitSecret } from '@/lib/rate-limit'
 import { isInviteValid } from '@/lib/invite'
 import {
   AuthError,
@@ -55,21 +55,41 @@ export async function POST(
         : undefined
 
     const ip = clientIp(request)
-    const [userRate, ipRate, codeRate] = await Promise.all([
-      checkRateLimit({ key: `join:user:${user.id}`, limit: 10, windowMs: 3_600_000 }),
-      checkRateLimit({ key: `join:ip:${ip}`, limit: 30, windowMs: 3_600_000 }),
-      checkRateLimit({ key: `join:code:${inviteCode}`, limit: 40, windowMs: 3_600_000 }),
-    ])
 
-    if (!userRate.allowed || !ipRate.allowed || !codeRate.allowed) {
-      const retry = Math.max(
-        userRate.retryAfterSeconds,
-        ipRate.retryAfterSeconds,
-        codeRate.retryAfterSeconds
-      )
+    // User/IP first — do not let a single actor burn the shared family code bucket
+    const userRate = await checkRateLimit({
+      key: `join:user:${user.id}`,
+      limit: 10,
+      windowMs: 3_600_000,
+    })
+    if (!userRate.allowed) {
       return jsonPrivate(
-        { error: 'Quá nhiều lần thử tham gia. Vui lòng thử lại sau.' },
-        { status: 429 }
+        {
+          error: 'Quá nhiều lần thử tham gia. Vui lòng thử lại sau.',
+          retryAfterSeconds: userRate.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(userRate.retryAfterSeconds) },
+        }
+      )
+    }
+
+    const ipRate = await checkRateLimit({
+      key: `join:ip:${ip}`,
+      limit: 30,
+      windowMs: 3_600_000,
+    })
+    if (!ipRate.allowed) {
+      return jsonPrivate(
+        {
+          error: 'Quá nhiều lần thử tham gia. Vui lòng thử lại sau.',
+          retryAfterSeconds: ipRate.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(ipRate.retryAfterSeconds) },
+        }
       )
     }
 
@@ -78,6 +98,26 @@ export async function POST(
     const family = await Family.findOne({ inviteCode })
     if (!family) {
       return jsonPrivate({ error: 'Mã mời không hợp lệ' }, { status: 404 })
+    }
+
+    // Per-family abuse limiter uses hashed code (never store raw invite secret)
+    const codeHash = hashRateLimitSecret(inviteCode, 'join')
+    const codeRate = await checkRateLimit({
+      key: `join:code:${codeHash}`,
+      limit: 80,
+      windowMs: 3_600_000,
+    })
+    if (!codeRate.allowed) {
+      return jsonPrivate(
+        {
+          error: 'Mã mời đang bị lạm dụng. Vui lòng thử lại sau.',
+          retryAfterSeconds: codeRate.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(codeRate.retryAfterSeconds) },
+        }
+      )
     }
 
     const validity = isInviteValid(family)

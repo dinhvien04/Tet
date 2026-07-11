@@ -19,6 +19,10 @@ vi.mock('mongoose', () => ({
   },
 }))
 
+vi.mock('@/lib/storage-cleanup', () => ({
+  countPendingCleanups: vi.fn(async () => 0),
+}))
+
 import { GET as live } from '@/app/api/health/route'
 import { GET as ready } from '@/app/api/health/ready/route'
 import { GET as diagnostics } from '@/app/api/health/diagnostics/route'
@@ -87,9 +91,9 @@ describe('GET /api/health/diagnostics', () => {
   it('returns checks with valid token (no connection string)', async () => {
     process.env.HEALTH_DIAGNOSTICS_TOKEN = 'correct-token'
     mockConnectDB.mockResolvedValue({})
-    mockCommand.mockImplementation(async (cmd: { ping?: number; replSetGetStatus?: number }) => {
+    mockCommand.mockImplementation(async (cmd: { ping?: number; hello?: number }) => {
       if (cmd.ping) return { ok: 1 }
-      if (cmd.replSetGetStatus) return { ok: 1 }
+      if (cmd.hello) return { ok: 1, setName: 'rs0' }
       return { ok: 1 }
     })
 
@@ -101,7 +105,19 @@ describe('GET /api/health/diagnostics', () => {
     expect(res.status).toBe(200)
     const data = await res.json()
     expect(data.checks.database).toBe('ok')
+    expect(data.checks.replicaSet).toBe(true)
     expect(JSON.stringify(data)).not.toMatch(/mongodb(\+srv)?:\/\//i)
     expect(data.runtime).not.toHaveProperty('mongodbUri')
+  })
+
+  it('does not accept CRON_SECRET as diagnostics token', async () => {
+    delete process.env.HEALTH_DIAGNOSTICS_TOKEN
+    process.env.CRON_SECRET = 'cron-only-secret'
+    const res = await diagnostics(
+      new NextRequest('http://localhost/api/health/diagnostics', {
+        headers: { authorization: 'Bearer cron-only-secret' },
+      })
+    )
+    expect(res.status).toBe(401)
   })
 })

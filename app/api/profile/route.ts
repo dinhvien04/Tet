@@ -130,8 +130,8 @@ export async function PATCH(request: NextRequest) {
 
 /**
  * DELETE body: { confirm: "XOA TAI KHOAN" | "DELETE" }
- * Soft-delete + anonymize: marks user deleted, bumps sessionVersion (JWT invalid),
- * strips personal data, blocks when sole admin or active game reservations.
+ * Soft-delete + anonymize inside a Mongo transaction; Cloudinary cleanup via outbox.
+ * Password only required when provider=credentials AND status=active.
  * See docs/DATA_DELETION.md
  */
 export async function DELETE(request: NextRequest) {
@@ -149,118 +149,191 @@ export async function DELETE(request: NextRequest) {
 
     await connectDB()
 
-    const user = await User.findById(sessionUser.id)
-    if (!user || user.status === 'deleted') {
-      // Idempotent
-      return NextResponse.json({ success: true, alreadyDeleted: true })
-    }
-
-    if (user.role === 'admin') {
-      const adminCount = await User.countDocuments({
-        role: 'admin',
-        status: { $ne: 'deleted' },
-      })
-      if (adminCount <= 1) {
-        return NextResponse.json(
-          { error: 'Không thể xóa admin hệ thống cuối cùng' },
-          { status: 400 }
-        )
-      }
-    }
-
-    const adminMemberships = await FamilyMember.find({
-      userId: user._id,
-      role: 'admin',
-    })
-    for (const m of adminMemberships) {
-      const admins = await FamilyMember.countDocuments({
-        familyId: m.familyId,
-        role: 'admin',
-      })
-      if (admins <= 1) {
-        return NextResponse.json(
-          {
-            error:
-              'Bạn là admin cuối của một nhà. Hãy giao quyền admin cho người khác trước khi xóa tài khoản.',
-          },
-          { status: 400 }
-        )
-      }
-    }
-
-    // Block active game reservations
-    const wallets = await BauCuaWallet.find({ userId: user._id })
-    for (const w of wallets) {
-      if ((w.reservedBalance || 0) > 0) {
-        return NextResponse.json(
-          {
-            error:
-              'Bạn còn điểm đang giữ trong ván Bầu Cua. Hãy đợi ván kết thúc trước khi xóa tài khoản.',
-          },
-          { status: 400 }
-        )
-      }
-    }
-
-    const BauCuaRound = (await import('@/lib/models/BauCuaRound')).default
-    const hosting = await BauCuaRound.findOne({
-      hostUserId: user._id,
-      status: { $in: ['betting', 'rolling'] },
-    })
-    if (hosting) {
-      return NextResponse.json(
-        { error: 'Bạn đang là host của ván Bầu Cua. Hãy kết thúc ván trước.' },
-        { status: 400 }
-      )
-    }
-
-    const uid = user._id
-    const now = new Date()
-
-    // Transfer family createdBy to another admin where possible
+    const {
+      withMongoTransaction,
+      TransactionNotSupportedError,
+    } = await import('@/lib/mongo-transaction')
+    const {
+      casDecrementFamilyAdmin,
+      casDecrementSystemAdmin,
+    } = await import('@/lib/admin-invariant')
+    const { enqueueStorageCleanup } = await import('@/lib/storage-cleanup')
     const Family = (await import('@/lib/models/Family')).default
-    const familiesCreated = await Family.find({ createdBy: uid })
-    for (const fam of familiesCreated) {
-      const otherAdmin = await FamilyMember.findOne({
-        familyId: fam._id,
-        role: 'admin',
-        userId: { $ne: uid },
+    const FamilyJoinRequest = (await import('@/lib/models/FamilyJoinRequest')).default
+    const BauCuaRound = (await import('@/lib/models/BauCuaRound')).default
+
+    // Pre-check for already deleted (idempotent)
+    const existing = await User.findById(sessionUser.id)
+    if (!existing || existing.status === 'deleted') {
+      const pendingCleanups = await (
+        await import('@/lib/models/StorageCleanupJob')
+      ).default.countDocuments({
+        userId: sessionUser.id,
+        status: { $in: ['pending', 'processing'] },
       })
-      if (otherAdmin) {
-        fam.createdBy = otherAdmin.userId
-        await fam.save()
+      return NextResponse.json({
+        success: true,
+        alreadyDeleted: true,
+        cleanupPending: pendingCleanups > 0,
+      })
+    }
+
+    let photoPublicIds: Array<{ publicId: string; photoId: string }> = []
+
+    try {
+      await withMongoTransaction(
+        async (session) => {
+          const opt = session ? { session } : {}
+          const user = await User.findById(sessionUser.id, null, opt)
+          if (!user || user.status === 'deleted') {
+            return
+          }
+
+          // System admin invariant
+          if (user.role === 'admin') {
+            const ok = await casDecrementSystemAdmin(session)
+            if (!ok) {
+              throw new AuthError('Không thể xóa admin hệ thống cuối cùng', 400)
+            }
+          }
+
+          // Family admin invariant for each admin membership
+          const adminMemberships = await FamilyMember.find(
+            { userId: user._id, role: 'admin' },
+            null,
+            opt
+          )
+          for (const m of adminMemberships) {
+            const ok = await casDecrementFamilyAdmin(m.familyId, session)
+            if (!ok) {
+              throw new AuthError(
+                'Bạn là admin cuối của một nhà. Hãy giao quyền admin cho người khác trước khi xóa tài khoản.',
+                400
+              )
+            }
+          }
+
+          // Block active game reservations
+          const wallets = await BauCuaWallet.find({ userId: user._id }, null, opt)
+          for (const w of wallets) {
+            if ((w.reservedBalance || 0) > 0) {
+              throw new AuthError(
+                'Bạn còn điểm đang giữ trong ván Bầu Cua. Hãy đợi ván kết thúc trước khi xóa tài khoản.',
+                400
+              )
+            }
+          }
+
+          const hosting = await BauCuaRound.findOne(
+            {
+              hostUserId: user._id,
+              status: { $in: ['betting', 'rolling'] },
+            },
+            null,
+            opt
+          )
+          if (hosting) {
+            throw new AuthError(
+              'Bạn đang là host của ván Bầu Cua. Hãy kết thúc ván trước.',
+              400
+            )
+          }
+
+          const uid = user._id
+          const now = new Date()
+
+          // Transfer family createdBy
+          const familiesCreated = await Family.find({ createdBy: uid }, null, opt)
+          for (const fam of familiesCreated) {
+            const otherAdmin = await FamilyMember.findOne(
+              {
+                familyId: fam._id,
+                role: 'admin',
+                userId: { $ne: uid },
+              },
+              null,
+              opt
+            )
+            if (otherAdmin) {
+              fam.createdBy = otherAdmin.userId
+              await fam.save(opt)
+            }
+          }
+
+          // Collect photo publicIds before delete for cleanup outbox
+          const photos = await Photo.find({ userId: uid }, 'publicId', opt)
+          photoPublicIds = photos
+            .filter((p) => p.publicId)
+            .map((p) => ({
+              publicId: p.publicId!,
+              photoId: p._id.toString(),
+            }))
+
+          // Soft-delete + anonymize (password optional when status=deleted)
+          user.status = 'deleted'
+          user.deletedAt = now
+          user.sessionVersion = (user.sessionVersion || 0) + 1
+          user.email = `deleted+${uid.toString()}@invalid.local`
+          user.name = 'Tài khoản đã xóa'
+          user.avatar = undefined
+          user.password = undefined
+          await user.save(opt)
+
+          await FamilyMember.deleteMany({ userId: uid }, opt)
+          await Reaction.deleteMany({ userId: uid }, opt)
+          await Comment.deleteMany({ userId: uid }, opt)
+          await Notification.deleteMany({ userId: uid }, opt)
+          await EventRsvp.deleteMany({ userId: uid }, opt)
+          await BauCuaBet.deleteMany({ userId: uid }, opt)
+          await BauCuaWallet.deleteMany({ userId: uid }, opt)
+          await Post.deleteMany({ userId: uid }, opt)
+          await Photo.deleteMany({ userId: uid }, opt)
+          await FamilyJoinRequest.deleteMany({ userId: uid }, opt)
+        },
+        { requireReplicaSet: true }
+      )
+    } catch (error) {
+      if (error instanceof AuthError) {
+        const { error: message, status } = authErrorResponse(error)
+        return NextResponse.json({ error: message }, { status })
+      }
+      if (error instanceof TransactionNotSupportedError) {
+        return NextResponse.json(
+          { error: 'Cần MongoDB replica set để xóa tài khoản an toàn' },
+          { status: 503 }
+        )
+      }
+      throw error
+    }
+
+    // Outbox: Cloudinary cleanup after DB commit
+    for (const p of photoPublicIds) {
+      if (p.publicId.startsWith('local:')) {
+        await enqueueStorageCleanup({
+          type: 'local',
+          publicId: p.publicId,
+          userId: sessionUser.id,
+          photoId: p.photoId,
+        })
+      } else {
+        await enqueueStorageCleanup({
+          type: 'cloudinary',
+          publicId: p.publicId,
+          userId: sessionUser.id,
+          photoId: p.photoId,
+        })
       }
     }
 
-    // Soft-delete + anonymize (keep ObjectId for FK integrity)
-    user.status = 'deleted'
-    user.deletedAt = now
-    user.sessionVersion = (user.sessionVersion || 0) + 1
-    user.email = `deleted+${uid.toString()}@invalid.local`
-    user.name = 'Tài khoản đã xóa'
-    user.avatar = undefined
-    user.password = undefined
-    await user.save()
+    console.log('[audit] account.deleted', {
+      userId: sessionUser.id,
+      cleanupJobs: photoPublicIds.length,
+    })
 
-    await Promise.all([
-      FamilyMember.deleteMany({ userId: uid }),
-      Reaction.deleteMany({ userId: uid }),
-      Comment.deleteMany({ userId: uid }),
-      Notification.deleteMany({ userId: uid }),
-      EventRsvp.deleteMany({ userId: uid }),
-      BauCuaBet.deleteMany({ userId: uid }),
-      BauCuaWallet.deleteMany({ userId: uid }),
-      Post.deleteMany({ userId: uid }),
-      Photo.deleteMany({ userId: uid }),
-    ])
-
-    // Cleanup join requests
-    const FamilyJoinRequest = (await import('@/lib/models/FamilyJoinRequest')).default
-    await FamilyJoinRequest.deleteMany({ userId: uid })
-
-    console.log('[audit] account.deleted', { userId: sessionUser.id })
-
-    return NextResponse.json({ success: true })
+    return NextResponse.json({
+      success: true,
+      cleanupPending: photoPublicIds.length > 0,
+    })
   } catch (error) {
     if (error instanceof AuthError) {
       const { error: message, status } = authErrorResponse(error)

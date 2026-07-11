@@ -1,5 +1,6 @@
 'use client'
 
+import { Suspense, useEffect, useState } from 'react'
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
 import { AppLayout } from '@/components/layout'
 import { useFamily } from '@/components/family/FamilyContext'
@@ -7,12 +8,11 @@ import { PhotoTimeline } from '@/components/photos/PhotoTimeline'
 import { PhotoUploader } from '@/components/photos/PhotoUploader'
 import { PhotoViewerLazy } from '@/components/photos/PhotoViewerLazy'
 import { usePhotos } from '@/lib/hooks/usePhotos'
-import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Upload, Loader2 } from 'lucide-react'
 import { useRouter, useSearchParams } from 'next/navigation'
 
-export default function PhotosPage() {
+function PhotosPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { currentFamily } = useFamily()
@@ -46,7 +46,7 @@ export default function PhotosPage() {
 
   const handleUploadSuccess = () => {
     setShowUploader(false)
-    mutate() // Refresh photos
+    mutate()
   }
 
   const handlePhotoClick = (photo: { id: string }) => {
@@ -132,5 +132,19 @@ export default function PhotosPage() {
         </div>
       </AppLayout>
     </ProtectedRoute>
+  )
+}
+
+export default function PhotosPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-[40vh] items-center justify-center">
+          <Loader2 className="w-8 h-8 animate-spin text-red-600" />
+        </div>
+      }
+    >
+      <PhotosPageContent />
+    </Suspense>
   )
 }

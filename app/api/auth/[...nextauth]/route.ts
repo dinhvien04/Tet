@@ -133,18 +133,8 @@ export const authOptions: NextAuthOptions = {
     maxAge: 30 * 24 * 60 * 60,
     updateAge: 24 * 60 * 60,
   },
-  cookies: {
-    sessionToken: {
-      name: 'next-auth.session-token',
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 30 * 24 * 60 * 60,
-      },
-    },
-  },
+  // Use NextAuth default cookie behavior (__Secure- prefix on HTTPS production).
+  // Custom sessionToken name previously risked middleware/getToken mismatch.
   pages: {
     signIn: '/login',
     error: '/login',

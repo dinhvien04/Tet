@@ -156,7 +156,9 @@ describe('POST /api/posts validation', () => {
     expect(res.status).toBe(200)
     const data = await res.json()
     expect(data.post.familyId).toBe(VALID_FAMILY)
-    expect(data.post.family_id).toBe(VALID_FAMILY)
+    // Legacy snake_case aliases removed (camelCase contract)
+    expect(data.post.family_id).toBeUndefined()
+    expect(data.post.users?.email).toBeUndefined()
   })
 
   it('accepts legacy family_id field', async () => {

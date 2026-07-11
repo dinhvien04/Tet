@@ -15,8 +15,15 @@ describe('security headers', () => {
     expect(csp).not.toContain('upgrade-insecure-requests')
   })
 
-  it('buildCsp adds upgrade-insecure-requests in production', () => {
-    expect(buildCsp(true)).toContain('upgrade-insecure-requests')
+  it('development CSP may include unsafe-eval', () => {
+    expect(buildCsp(false)).toContain('unsafe-eval')
+  })
+
+  it('production CSP does NOT include unsafe-eval', () => {
+    const csp = buildCsp(true)
+    expect(csp).not.toContain('unsafe-eval')
+    expect(csp).toContain("script-src 'self' 'unsafe-inline'")
+    expect(csp).toContain('upgrade-insecure-requests')
   })
 
   it('enforces CSP by default (not report-only)', () => {

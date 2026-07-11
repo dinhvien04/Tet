@@ -4,21 +4,7 @@ import { useState } from 'react'
 import Image from 'next/image'
 import { Check, X } from 'lucide-react'
 
-interface PhotoUser {
-  id: string
-  name: string
-  email?: string
-  avatar?: string | null
-}
-
-interface Photo {
-  id: string
-  family_id: string
-  user_id: string
-  url: string
-  uploaded_at: string
-  users?: PhotoUser
-}
+import type { Photo } from '@/types/photo'
 
 interface PhotoSelectorProps {
   photos: Photo[]

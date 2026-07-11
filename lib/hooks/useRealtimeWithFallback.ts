@@ -41,7 +41,11 @@ export function useRealtimeWithFallback<T>({
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const isMountedRef = useRef(true)
   const fetchDataRef = useRef(fetchData)
-  fetchDataRef.current = fetchData
+
+  // Keep latest fetchData without writing refs during render (react-hooks/refs)
+  useEffect(() => {
+    fetchDataRef.current = fetchData
+  }, [fetchData])
 
   const stopPolling = useCallback(() => {
     if (pollingIntervalRef.current) {

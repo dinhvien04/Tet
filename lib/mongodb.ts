@@ -2,9 +2,7 @@ import { MongoClient, Db } from 'mongodb'
 import mongoose from 'mongoose'
 
 declare global {
-  // eslint-disable-next-line no-var
   var _mongoClientPromise: Promise<MongoClient> | undefined
-  // eslint-disable-next-line no-var
   var mongoose: {
     conn: typeof import('mongoose') | null
     promise: Promise<typeof import('mongoose')> | null

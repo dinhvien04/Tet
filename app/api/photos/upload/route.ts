@@ -18,6 +18,7 @@ import {
   type SafeImageMime,
 } from '@/lib/image-process'
 import { checkDailyQuota, releaseDailyQuota } from '@/lib/rate-limit'
+import { destroyCloudinaryOrEnqueue, enqueueStorageCleanup } from '@/lib/storage-cleanup'
 
 const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic'])
 const DAILY_UPLOAD_LIMIT = 50
@@ -95,18 +96,11 @@ async function uploadToCloudinary(buffer: Buffer, familyId: string) {
   })
 }
 
-async function destroyCloudinary(publicId: string) {
-  try {
-    await cloudinary.uploader.destroy(publicId)
-  } catch (e) {
-    console.error('Failed to cleanup Cloudinary asset', e)
-  }
-}
-
 export async function POST(request: NextRequest) {
   let uploadedPublicId: string | null = null
   let localPath: string | null = null
-  let quotaKey: string | null = null
+  let photoIdCreated: string | null = null
+  let quotaBucketKey: string | null = null
   let quotaReserved = false
 
   try {
@@ -139,12 +133,12 @@ export async function POST(request: NextRequest) {
     await connectDB()
 
     // Atomic daily quota reservation (release on failure below)
-    quotaKey = `upload:user:${user.id}`
     const quota = await checkDailyQuota({
-      key: quotaKey,
+      key: `upload:user:${user.id}`,
       limit: DAILY_UPLOAD_LIMIT,
     })
     if (!quota.allowed) {
+      await releaseDailyQuota({ bucketKey: quota.bucketKey })
       return NextResponse.json(
         {
           error: 'Bạn đã đạt giới hạn upload trong ngày',
@@ -156,6 +150,7 @@ export async function POST(request: NextRequest) {
         }
       )
     }
+    quotaBucketKey = quota.bucketKey
     quotaReserved = true
 
     const bytes = await file.arrayBuffer()
@@ -189,7 +184,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Real pixel check + strip EXIF via re-encode
+    // Real pixel check + strip EXIF via re-encode + output size limit
     const processed = await processUploadImage(buffer, magicMime)
 
     let uploadResult: { secure_url: string; public_id: string }
@@ -219,12 +214,12 @@ export async function POST(request: NextRequest) {
         url: uploadResult.secure_url,
         publicId: uploadResult.public_id,
       })
+      photoIdCreated = photo._id.toString()
 
-      await photo.populate('userId', 'name email avatar')
+      await photo.populate('userId', 'name avatar')
       const populatedUser = photo.userId as unknown as {
         _id: { toString(): string }
         name: string
-        email: string
         avatar?: string | null
       }
 
@@ -244,23 +239,37 @@ export async function POST(request: NextRequest) {
           uploader: {
             id: populatedUser._id.toString(),
             name: populatedUser.name,
-            email: populatedUser.email,
             avatar: populatedUser.avatar ?? null,
           },
         },
       })
-    } catch (dbError) {
+    } catch (postCreateError) {
+      // Rollback both DB metadata and storage on any post-create failure
+      if (photoIdCreated) {
+        try {
+          await Photo.deleteOne({ _id: photoIdCreated })
+        } catch (e) {
+          console.error('[upload] failed to delete orphan Photo doc', e)
+        }
+        photoIdCreated = null
+      }
       if (uploadedPublicId && !uploadedPublicId.startsWith('local:')) {
-        await destroyCloudinary(uploadedPublicId)
+        await destroyCloudinaryOrEnqueue(uploadedPublicId, { userId: user.id })
       }
       if (localPath) {
         try {
           await unlink(localPath)
         } catch {
-          /* ignore */
+          if (uploadedPublicId) {
+            await enqueueStorageCleanup({
+              type: 'local',
+              publicId: uploadedPublicId,
+              userId: user.id,
+            })
+          }
         }
       }
-      throw dbError
+      throw postCreateError
     }
   } catch (error) {
     if (error instanceof AuthError) {
@@ -273,9 +282,9 @@ export async function POST(request: NextRequest) {
     console.error('Error uploading photo:', error)
     return NextResponse.json({ error: 'Không thể upload ảnh' }, { status: 500 })
   } finally {
-    if (quotaReserved && quotaKey) {
+    if (quotaReserved && quotaBucketKey) {
       try {
-        await releaseDailyQuota({ key: quotaKey })
+        await releaseDailyQuota({ bucketKey: quotaBucketKey })
       } catch (e) {
         console.error('Failed to release upload quota', e)
       }

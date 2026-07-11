@@ -8,8 +8,10 @@ export interface IBauCuaFamilyState {
   _id: mongoose.Types.ObjectId
   familyId: mongoose.Types.ObjectId
   activeRoundId: mongoose.Types.ObjectId | null
-  status: 'idle' | 'betting' | 'rolling'
+  status: 'idle' | 'starting' | 'betting' | 'rolling'
   version: number
+  /** Incremented on each bet so concurrent BET and ROLL share a write conflict. */
+  betRevision: number
   updatedAt: Date
 }
 
@@ -27,10 +29,11 @@ const BauCuaFamilyStateSchema = new Schema<IBauCuaFamilyState>({
   },
   status: {
     type: String,
-    enum: ['idle', 'betting', 'rolling'],
+    enum: ['idle', 'starting', 'betting', 'rolling'],
     default: 'idle',
   },
   version: { type: Number, default: 0 },
+  betRevision: { type: Number, default: 0 },
   updatedAt: { type: Date, default: Date.now },
 })
 

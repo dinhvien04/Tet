@@ -6,6 +6,33 @@ import Post from '@/lib/models/Post'
 import Comment from '@/lib/models/Comment'
 import FamilyMember from '@/lib/models/FamilyMember'
 
+function formatComment(comment: {
+  _id: { toString(): string }
+  postId: { toString(): string }
+  content: string
+  createdAt: Date
+  userId: unknown
+}) {
+  const user = comment.userId as {
+    _id: { toString(): string }
+    name: string
+    avatar?: string | null
+  }
+
+  return {
+    id: comment._id.toString(),
+    postId: comment.postId.toString(),
+    userId: user._id.toString(),
+    content: comment.content,
+    createdAt: comment.createdAt,
+    users: {
+      id: user._id.toString(),
+      name: user.name,
+      avatar: user.avatar ?? null,
+    },
+  }
+}
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -37,34 +64,13 @@ export async function GET(
     }
 
     const comments = await Comment.find({ postId: id })
-      .populate('userId', 'name email avatar')
+      .populate('userId', 'name avatar')
       .sort({ createdAt: 1 })
       .lean()
 
-    const formattedComments = comments.map((comment) => {
-      const user = comment.userId as unknown as {
-        _id: { toString(): string }
-        name: string
-        email: string
-        avatar?: string | null
-      }
-
-      return {
-        id: comment._id.toString(),
-        post_id: comment.postId.toString(),
-        user_id: user._id.toString(),
-        content: comment.content,
-        created_at: comment.createdAt,
-        users: {
-          id: user._id.toString(),
-          name: user.name,
-          email: user.email,
-          avatar: user.avatar ?? null,
-        },
-      }
+    return NextResponse.json({
+      comments: comments.map((c) => formatComment(c as never)),
     })
-
-    return NextResponse.json({ comments: formattedComments })
   } catch (error) {
     console.error('Error fetching comments:', error)
     return NextResponse.json({ error: 'Khong the lay binh luan' }, { status: 500 })
@@ -117,29 +123,11 @@ export async function POST(
       content,
     })
 
-    await comment.populate('userId', 'name email avatar')
-    const user = comment.userId as unknown as {
-      _id: { toString(): string }
-      name: string
-      email: string
-      avatar?: string | null
-    }
+    await comment.populate('userId', 'name avatar')
 
     return NextResponse.json({
       success: true,
-      comment: {
-        id: comment._id.toString(),
-        post_id: comment.postId.toString(),
-        user_id: user._id.toString(),
-        content: comment.content,
-        created_at: comment.createdAt,
-        users: {
-          id: user._id.toString(),
-          name: user.name,
-          email: user.email,
-          avatar: user.avatar ?? null,
-        },
-      },
+      comment: formatComment(comment as never),
     })
   } catch (error) {
     console.error('Error creating comment:', error)

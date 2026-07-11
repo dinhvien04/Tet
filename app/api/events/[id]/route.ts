@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
 import Event from '@/lib/models/Event'
 import EventTask from '@/lib/models/EventTask'
+import EventRsvp from '@/lib/models/EventRsvp'
+import Notification from '@/lib/models/Notification'
 import FamilyMember from '@/lib/models/FamilyMember'
 import {
   AuthError,
@@ -10,6 +12,10 @@ import {
   requireUser,
 } from '@/lib/authorization'
 import { requireString, optionalString, ValidationError } from '@/lib/api/validate'
+import {
+  TransactionNotSupportedError,
+  withMongoTransaction,
+} from '@/lib/mongo-transaction'
 
 async function loadEventAccess(eventId: string, userId: string) {
   parseObjectId(eventId, 'eventId')
@@ -48,7 +54,7 @@ export async function GET(
     const user = await requireUser()
     const { event } = await loadEventAccess(id, user.id)
 
-    await event.populate('createdBy', 'name email avatar')
+    await event.populate('createdBy', 'name avatar')
     const creator = event.createdBy as unknown as {
       _id: { toString(): string }
       name: string
@@ -152,8 +158,36 @@ export async function DELETE(
       )
     }
 
-    await EventTask.deleteMany({ eventId: event._id })
-    await Event.deleteOne({ _id: event._id })
+    const eventIdStr = event._id.toString()
+    try {
+      await withMongoTransaction(
+        async (session) => {
+          const opt = session ? { session } : {}
+          await EventTask.deleteMany({ eventId: event._id }, opt)
+          await EventRsvp.deleteMany({ eventId: event._id }, opt)
+          // Notifications use link/dedupeKey referencing the event path
+          await Notification.deleteMany(
+            {
+              $or: [
+                { link: { $regex: eventIdStr } },
+                { dedupeKey: { $regex: eventIdStr } },
+              ],
+            },
+            opt
+          )
+          await Event.deleteOne({ _id: event._id }, opt)
+        },
+        { requireReplicaSet: true }
+      )
+    } catch (error) {
+      if (error instanceof TransactionNotSupportedError) {
+        return NextResponse.json(
+          { error: 'Cần MongoDB replica set để xóa sự kiện an toàn' },
+          { status: 503 }
+        )
+      }
+      throw error
+    }
 
     return NextResponse.json({ success: true })
   } catch (error) {

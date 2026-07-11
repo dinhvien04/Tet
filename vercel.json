@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/check-notifications",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/storage-cleanup",
+      "schedule": "15 * * * *"
     }
   ],
   "headers": [

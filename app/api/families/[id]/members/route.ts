@@ -13,6 +13,10 @@ import {
   TransactionNotSupportedError,
   withMongoTransaction,
 } from '@/lib/mongo-transaction'
+import {
+  casDecrementFamilyAdmin,
+  casIncrementFamilyAdmin,
+} from '@/lib/admin-invariant'
 import { requireEnum, requireObjectIdString, ValidationError } from '@/lib/api/validate'
 
 function formatMember(member: {
@@ -24,24 +28,20 @@ function formatMember(member: {
   const user = member.userId as {
     _id: { toString(): string }
     name: string
-    email: string
+    email?: string
     avatar?: string
   }
 
   return {
     id: member._id.toString(),
     userId: user._id.toString(),
-    user_id: user._id.toString(),
     name: user.name,
-    email: user.email,
     avatar: user.avatar,
     role: member.role,
     joinedAt: member.joinedAt,
-    joined_at: member.joinedAt,
     users: {
       id: user._id.toString(),
       name: user.name,
-      email: user.email,
       avatar: user.avatar,
     },
   }
@@ -65,7 +65,7 @@ export async function GET(
     await requireFamilyMember(id)
 
     const members = await FamilyMember.find({ familyId: id })
-      .populate('userId', 'name email avatar')
+      .populate('userId', 'name avatar')
       .lean()
 
     return NextResponse.json({ members: members.map(formatMember) })
@@ -95,48 +95,45 @@ export async function PATCH(
     await connectDB()
 
     try {
-      const updated = await withMongoTransaction(async (session) => {
-        const q = <T>(query: T): T => {
-          if (
-            session &&
-            query &&
-            typeof (query as unknown as { session?: unknown }).session === 'function'
-          ) {
-            return (query as unknown as { session: (s: typeof session) => T }).session(
-              session
-            )
+      const updated = await withMongoTransaction(
+        async (session) => {
+          const opt = session ? { session } : {}
+
+          const target = await FamilyMember.findOne(
+            { _id: memberId, familyId },
+            null,
+            opt
+          ).populate('userId', 'name avatar')
+
+          if (!target) {
+            throw new AuthError('Không tìm thấy thành viên', 404)
           }
-          return query
-        }
 
-        const target = await q(
-          FamilyMember.findOne({ _id: memberId, familyId }).populate(
-            'userId',
-            'name email avatar'
-          )
-        )
-        if (!target) {
-          throw new AuthError('Không tìm thấy thành viên', 404)
-        }
-
-        // Demoting an admin: require another admin inside the same transaction
-        if (target.role === 'admin' && role === 'member') {
-          const adminCount = await FamilyMember.countDocuments(
-            { familyId, role: 'admin' },
-            session ? { session } : undefined
-          )
-          if (adminCount <= 1) {
-            throw new LastAdminError()
+          if (target.role === role) {
+            return target
           }
-        }
 
-        target.role = role
-        await target.save(session ? { session } : undefined)
-        return target
-      })
+          // Demoting admin → member: CAS shared admin lock
+          if (target.role === 'admin' && role === 'member') {
+            const ok = await casDecrementFamilyAdmin(familyId, session)
+            if (!ok) {
+              throw new LastAdminError()
+            }
+          }
 
-      // Ensure populated shape for response
-      await updated.populate('userId', 'name email avatar')
+          // Promoting member → admin
+          if (target.role === 'member' && role === 'admin') {
+            await casIncrementFamilyAdmin(familyId, session)
+          }
+
+          target.role = role
+          await target.save(opt)
+          return target
+        },
+        { requireReplicaSet: true }
+      )
+
+      await updated.populate('userId', 'name avatar')
 
       return NextResponse.json({
         success: true,
@@ -186,35 +183,33 @@ export async function DELETE(
     await connectDB()
 
     try {
-      await withMongoTransaction(async (session) => {
-        const target = await FamilyMember.findOne(
-          { _id: memberId, familyId },
-          null,
-          session ? { session } : undefined
-        )
-        if (!target) {
-          throw new AuthError('Không tìm thấy thành viên', 404)
-        }
-
-        if (target.userId.toString() === user.id) {
-          throw new AuthError('Không thể tự xóa chính mình', 400)
-        }
-
-        if (target.role === 'admin') {
-          const adminCount = await FamilyMember.countDocuments(
-            { familyId, role: 'admin' },
-            session ? { session } : undefined
+      await withMongoTransaction(
+        async (session) => {
+          const opt = session ? { session } : {}
+          const target = await FamilyMember.findOne(
+            { _id: memberId, familyId },
+            null,
+            opt
           )
-          if (adminCount <= 1) {
-            throw new LastAdminError()
+          if (!target) {
+            throw new AuthError('Không tìm thấy thành viên', 404)
           }
-        }
 
-        await FamilyMember.deleteOne(
-          { _id: target._id },
-          session ? { session } : undefined
-        )
-      })
+          if (target.userId.toString() === user.id) {
+            throw new AuthError('Không thể tự xóa chính mình', 400)
+          }
+
+          if (target.role === 'admin') {
+            const ok = await casDecrementFamilyAdmin(familyId, session)
+            if (!ok) {
+              throw new LastAdminError()
+            }
+          }
+
+          await FamilyMember.deleteOne({ _id: target._id }, opt)
+        },
+        { requireReplicaSet: true }
+      )
 
       return NextResponse.json({ success: true })
     } catch (error) {

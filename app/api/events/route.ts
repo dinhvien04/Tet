@@ -42,11 +42,10 @@ export async function POST(request: NextRequest) {
       createdBy: user.id,
     })
 
-    await event.populate('createdBy', 'name email avatar')
+    await event.populate('createdBy', 'name avatar')
     const creator = event.createdBy as unknown as {
       _id: { toString(): string }
       name: string
-      email: string
       avatar?: string
     }
 
@@ -63,14 +62,9 @@ export async function POST(request: NextRequest) {
         location: event.location,
         createdBy: creatorId,
         createdAt: event.createdAt,
-        // legacy aliases for existing UI types
-        family_id: familyIdStr,
-        created_by: creatorId,
-        created_at: event.createdAt,
         creator: {
           id: creatorId,
           name: creator.name,
-          email: creator.email,
           avatar: creator.avatar,
         },
         users: {
@@ -131,7 +125,7 @@ export async function GET(request: NextRequest) {
     const query = andClauses.length === 1 ? andClauses[0] : { $and: andClauses }
 
     const events = await Event.find(query)
-      .populate('createdBy', 'name email avatar')
+      .populate('createdBy', 'name avatar')
       .sort({ date: sortDir, _id: sortDir })
       .limit(limit)
       .lean()
@@ -146,7 +140,6 @@ export async function GET(request: NextRequest) {
       const creator = eventDoc.createdBy as unknown as {
         _id: { toString(): string }
         name: string
-        email: string
         avatar?: string
       }
       const familyIdStr = eventDoc.familyId.toString()
@@ -160,13 +153,9 @@ export async function GET(request: NextRequest) {
         location: eventDoc.location,
         createdBy: creatorId,
         createdAt: eventDoc.createdAt,
-        family_id: familyIdStr,
-        created_by: creatorId,
-        created_at: eventDoc.createdAt,
         creator: {
           id: creatorId,
           name: creator.name,
-          email: creator.email,
           avatar: creator.avatar,
         },
         users: {

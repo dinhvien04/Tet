@@ -3,6 +3,7 @@ import { connectDB } from '@/lib/mongodb'
 import BauCuaRound, { BAU_CUA_ITEMS } from '@/lib/models/BauCuaRound'
 import BauCuaBet from '@/lib/models/BauCuaBet'
 import BauCuaWallet from '@/lib/models/BauCuaWallet'
+import BauCuaFamilyState from '@/lib/models/BauCuaFamilyState'
 import {
   AuthError,
   authErrorResponse,
@@ -15,6 +16,11 @@ import {
 
 const MAX_BET = 1000
 const STARTING_BALANCE = 1000
+
+function isDuplicateKeyError(err: unknown): boolean {
+  const e = err as { code?: number; message?: string }
+  return e?.code === 11000 || /E11000|duplicate key/i.test(e?.message || '')
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -52,74 +58,132 @@ export async function POST(request: NextRequest) {
     const { user, familyId } = await requireFamilyMember(String(familyIdRaw))
     await connectDB()
 
+    // Fast path: existing bet outside transaction (idempotent retry)
+    const existingOutside = await BauCuaBet.findOne({
+      familyId,
+      userId: user.id,
+      idempotencyKey,
+    })
+    if (existingOutside) {
+      const wallet = await BauCuaWallet.findOne({ familyId, userId: user.id })
+      const round = await BauCuaRound.findById(existingOutside.roundId)
+      const bal = wallet?.balance ?? STARTING_BALANCE
+      const reserved = wallet?.reservedBalance ?? 0
+      return NextResponse.json({
+        success: true,
+        idempotent: true,
+        bet: {
+          id: existingOutside._id.toString(),
+          item: existingOutside.item,
+          amount: existingOutside.amount,
+        },
+        wallet: {
+          balance: bal,
+          reservedBalance: reserved,
+          availableBalance: bal - reserved,
+        },
+        round: round
+          ? { id: round._id.toString(), roundNumber: round.roundNumber }
+          : null,
+      })
+    }
+
     try {
-      const payload = await withMongoTransaction(async (session) => {
-        const roundQ = BauCuaRound.findOne({ familyId, status: 'betting' }).sort({
-          roundNumber: -1,
-        })
-        if (session) roundQ.session(session)
-        const round = await roundQ
+      const payload = await withMongoTransaction(
+        async (session) => {
+          const opt = session ? { session } : {}
 
-        if (!round) {
-          throw new AuthError('Chưa có ván đang mở để đặt cược', 409)
-        }
+          // CAS lock on family state: must be betting with active round
+          // Write conflict with ROLL (which sets status=rolling) and concurrent BETs (betRevision)
+          const state = await BauCuaFamilyState.findOneAndUpdate(
+            { familyId, status: 'betting', activeRoundId: { $ne: null } },
+            {
+              $inc: { betRevision: 1 },
+              $set: { updatedAt: new Date() },
+            },
+            { new: true, ...opt }
+          )
 
-        if (round.bettingClosesAt && new Date() > round.bettingClosesAt) {
-          throw new AuthError('Đã hết thời gian đặt cược', 409)
-        }
-
-        const existingQ = BauCuaBet.findOne({
-          roundId: round._id,
-          userId: user.id,
-          idempotencyKey,
-        })
-        if (session) existingQ.session(session)
-        const existing = await existingQ
-
-        if (existing) {
-          const walletQ = BauCuaWallet.findOne({ familyId, userId: user.id })
-          if (session) walletQ.session(session)
-          const wallet = await walletQ
-          return {
-            idempotent: true as const,
-            bet: existing,
-            wallet,
-            round,
+          if (!state || !state.activeRoundId) {
+            throw new AuthError('Chưa có ván đang mở để đặt cược', 409)
           }
-        }
 
-        await BauCuaWallet.findOneAndUpdate(
-          { familyId, userId: user.id },
-          {
-            $setOnInsert: {
-              balance: STARTING_BALANCE,
-              reservedBalance: 0,
-              updatedAt: new Date(),
+          const round = await BauCuaRound.findOne(
+            {
+              _id: state.activeRoundId,
+              familyId,
+              status: 'betting',
+              settlementCompleted: false,
             },
-          },
-          { upsert: true, ...(session ? { session } : {}) }
-        )
+            null,
+            opt
+          )
 
-        const wallet = await BauCuaWallet.findOneAndUpdate(
-          {
-            familyId,
-            userId: user.id,
-            $expr: {
-              $gte: [{ $subtract: ['$balance', '$reservedBalance'] }, amount],
+          if (!round) {
+            throw new AuthError('Chưa có ván đang mở để đặt cược', 409)
+          }
+
+          if (round.bettingClosesAt && new Date() > round.bettingClosesAt) {
+            throw new AuthError('Đã hết thời gian đặt cược', 409)
+          }
+
+          // Idempotency inside transaction
+          const existing = await BauCuaBet.findOne(
+            {
+              roundId: round._id,
+              userId: user.id,
+              idempotencyKey,
             },
-          },
-          {
-            $inc: { reservedBalance: amount },
-            $set: { updatedAt: new Date() },
-          },
-          { new: true, ...(session ? { session } : {}) }
-        )
+            null,
+            opt
+          )
 
-        if (!wallet) {
-          throw new AuthError('Không đủ điểm khả dụng để đặt cược', 400)
-        }
+          if (existing) {
+            const wallet = await BauCuaWallet.findOne(
+              { familyId, userId: user.id },
+              null,
+              opt
+            )
+            return {
+              idempotent: true as const,
+              bet: existing,
+              wallet,
+              round,
+            }
+          }
 
-        try {
+          await BauCuaWallet.findOneAndUpdate(
+            { familyId, userId: user.id },
+            {
+              $setOnInsert: {
+                balance: STARTING_BALANCE,
+                reservedBalance: 0,
+                updatedAt: new Date(),
+              },
+            },
+            { upsert: true, ...opt }
+          )
+
+          const wallet = await BauCuaWallet.findOneAndUpdate(
+            {
+              familyId,
+              userId: user.id,
+              $expr: {
+                $gte: [{ $subtract: ['$balance', '$reservedBalance'] }, amount],
+              },
+            },
+            {
+              $inc: { reservedBalance: amount },
+              $set: { updatedAt: new Date() },
+            },
+            { new: true, ...opt }
+          )
+
+          if (!wallet) {
+            throw new AuthError('Không đủ điểm khả dụng để đặt cược', 400)
+          }
+
+          // Create bet — on duplicate key, abort entire transaction (do not continue)
           const [createdBet] = await BauCuaBet.create(
             [
               {
@@ -141,39 +205,9 @@ export async function POST(request: NextRequest) {
             wallet,
             round,
           }
-        } catch (createError: unknown) {
-          const err = createError as { code?: number }
-          if (err.code === 11000) {
-            const againQ = BauCuaBet.findOne({
-              roundId: round._id,
-              userId: user.id,
-              idempotencyKey,
-            })
-            if (session) againQ.session(session)
-            const again = await againQ
-            if (again) {
-              await BauCuaWallet.updateOne(
-                { _id: wallet._id },
-                {
-                  $inc: { reservedBalance: -amount },
-                  $set: { updatedAt: new Date() },
-                },
-                session ? { session } : undefined
-              )
-              const w2Q = BauCuaWallet.findById(wallet._id)
-              if (session) w2Q.session(session)
-              const w2 = await w2Q
-              return {
-                idempotent: true as const,
-                bet: again,
-                wallet: w2,
-                round,
-              }
-            }
-          }
-          throw createError
-        }
-      })
+        },
+        { requireReplicaSet: true }
+      )
 
       const w = payload.wallet
       const bal = w?.balance ?? STARTING_BALANCE
@@ -210,6 +244,38 @@ export async function POST(request: NextRequest) {
           },
           { status: 503 }
         )
+      }
+      // Duplicate idempotency: transaction aborted + rolled back reserve.
+      // Return existing bet outside transaction.
+      if (isDuplicateKeyError(error)) {
+        const again = await BauCuaBet.findOne({
+          familyId,
+          userId: user.id,
+          idempotencyKey,
+        })
+        if (again) {
+          const wallet = await BauCuaWallet.findOne({ familyId, userId: user.id })
+          const round = await BauCuaRound.findById(again.roundId)
+          const bal = wallet?.balance ?? STARTING_BALANCE
+          const reserved = wallet?.reservedBalance ?? 0
+          return NextResponse.json({
+            success: true,
+            idempotent: true,
+            bet: {
+              id: again._id.toString(),
+              item: again.item,
+              amount: again.amount,
+            },
+            wallet: {
+              balance: bal,
+              reservedBalance: reserved,
+              availableBalance: bal - reserved,
+            },
+            round: round
+              ? { id: round._id.toString(), roundNumber: round.roundNumber }
+              : null,
+          })
+        }
       }
       throw error
     }

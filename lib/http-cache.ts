@@ -12,7 +12,13 @@ export function withPrivateNoStore(response: NextResponse): NextResponse {
   return response
 }
 
-export function jsonPrivate(data: unknown, init?: { status?: number }): NextResponse {
-  const res = NextResponse.json(data, { status: init?.status ?? 200 })
+export function jsonPrivate(
+  data: unknown,
+  init?: { status?: number; headers?: HeadersInit }
+): NextResponse {
+  const res = NextResponse.json(data, {
+    status: init?.status ?? 200,
+    headers: init?.headers,
+  })
   return withPrivateNoStore(res)
 }
