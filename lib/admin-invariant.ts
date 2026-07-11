@@ -28,11 +28,24 @@ export async function ensureFamilyAdminState(
     sessionOpt(session)
   )
 
+  // Prefer actual membership count as source of truth; lock doc for write-conflict only.
   const existing = await FamilyAdminState.findOne({ familyId: fid }, null, sessionOpt(session))
   if (existing) {
-    return { adminCount: existing.adminCount, version: existing.version }
+    // Sync counter to actual when drifted (still under same TX when session present)
+    if (existing.adminCount !== actual) {
+      await FamilyAdminState.updateOne(
+        { familyId: fid, version: existing.version },
+        {
+          $set: { adminCount: actual, updatedAt: new Date() },
+          $inc: { version: 1 },
+        },
+        sessionOpt(session)
+      )
+    }
+    return { adminCount: actual, version: existing.version }
   }
 
+  // Bootstrap OUTSIDE multi-doc TX when possible — if inside TX, only create once and rethrow non-dup
   try {
     await FamilyAdminState.create(
       [
@@ -48,36 +61,54 @@ export async function ensureFamilyAdminState(
   } catch (err: unknown) {
     const e = err as { code?: number }
     if (e.code !== 11000) throw err
+    // Do not continue ops on aborted TX after E11000 inside session
+    if (session) throw err
   }
 
   const state = await FamilyAdminState.findOne({ familyId: fid }, null, sessionOpt(session))
   return {
-    adminCount: state?.adminCount ?? actual,
+    adminCount: actual,
     version: state?.version ?? 0,
   }
 }
 
 /**
- * CAS-demote/delete one family admin: requires adminCount > 1 before decrement.
- * Returns false if CAS failed (caller should throw LastAdminError).
+ * CAS-demote/delete one family admin using actual count + lock version.
+ * Returns false if would leave zero admins.
  */
 export async function casDecrementFamilyAdmin(
   familyId: string | { toString(): string },
   session?: ClientSession
 ): Promise<boolean> {
   const fid = familyId.toString()
-  await ensureFamilyAdminState(fid, session)
-
-  const updated = await FamilyAdminState.findOneAndUpdate(
-    { familyId: fid, adminCount: { $gt: 1 } },
+  // Lock via version bump
+  const locked = await FamilyAdminState.findOneAndUpdate(
+    { familyId: fid },
     {
-      $inc: { adminCount: -1, version: 1 },
+      $inc: { version: 1 },
       $set: { updatedAt: new Date() },
     },
-    { new: true, ...sessionOpt(session) }
+    { new: true, upsert: true, ...sessionOpt(session) }
   )
+  void locked
 
-  return Boolean(updated)
+  const actual = await FamilyMember.countDocuments(
+    { familyId: fid, role: 'admin' },
+    sessionOpt(session)
+  )
+  if (actual <= 1) {
+    return false
+  }
+
+  await FamilyAdminState.findOneAndUpdate(
+    { familyId: fid },
+    {
+      $set: { adminCount: actual - 1, updatedAt: new Date() },
+      $inc: { version: 1 },
+    },
+    sessionOpt(session)
+  )
+  return true
 }
 
 /**
@@ -151,18 +182,32 @@ export async function ensureSystemAdminState(
 export async function casDecrementSystemAdmin(
   session?: ClientSession
 ): Promise<boolean> {
-  await ensureSystemAdminState(session)
-
-  const updated = await SystemAdminState.findOneAndUpdate(
-    { key: 'system-admin', adminCount: { $gt: 1 } },
+  await SystemAdminState.findOneAndUpdate(
+    { key: 'system-admin' },
     {
-      $inc: { adminCount: -1, version: 1 },
+      $inc: { version: 1 },
       $set: { updatedAt: new Date() },
     },
-    { new: true, ...sessionOpt(session) }
+    { upsert: true, ...sessionOpt(session) }
   )
 
-  return Boolean(updated)
+  const actual = await User.countDocuments(
+    { role: 'admin', status: { $ne: 'deleted' } },
+    sessionOpt(session)
+  )
+  if (actual <= 1) {
+    return false
+  }
+
+  await SystemAdminState.findOneAndUpdate(
+    { key: 'system-admin' },
+    {
+      $set: { adminCount: actual - 1, updatedAt: new Date() },
+      $inc: { version: 1 },
+    },
+    sessionOpt(session)
+  )
+  return true
 }
 
 export async function casIncrementSystemAdmin(

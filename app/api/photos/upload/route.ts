@@ -18,7 +18,11 @@ import {
   type SafeImageMime,
 } from '@/lib/image-process'
 import { checkDailyQuota, releaseDailyQuota } from '@/lib/rate-limit'
-import { destroyCloudinaryOrEnqueue, enqueueStorageCleanup } from '@/lib/storage-cleanup'
+import {
+  destroyCloudinaryOrEnqueue,
+  enqueueStorageCleanup,
+  buildCleanupIdempotencyKey,
+} from '@/lib/storage-cleanup'
 
 const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic'])
 const DAILY_UPLOAD_LIMIT = 50
@@ -264,6 +268,11 @@ export async function POST(request: NextRequest) {
             await enqueueStorageCleanup({
               type: 'local',
               publicId: uploadedPublicId,
+              idempotencyKey: buildCleanupIdempotencyKey(
+                'upload-rollback',
+                user.id,
+                uploadedPublicId
+              ),
               userId: user.id,
             })
           }

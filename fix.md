@@ -1,1302 +1,1042 @@
-# GROK 4.5 — TẾT CONNECT REVIEW ROUND 3 / PRODUCTION HARDENING PROMPT
+# GROK 4.5 — TẾT CONNECT REVIEW ROUND 4
 
 > Repository: `https://github.com/dinhvien04/Tet`
 >
-> Commit đã được review: `7e9df9101f0117749fdc605090532b2ec31438b6`
+> Commit đã review: `d9e7210c9c42b2af5c1554ec0ee16a233834ac36`
 >
-> Prompt này nối tiếp:
->
-> - `fix.md`
-> - `GROK_4_5_TET_REVIEW_ROUND_2_FIX_PROMPT.md`
->
-> Không làm lại toàn bộ dự án. Hãy xác minh code hiện tại và sửa chính xác những lỗi còn sót trong vòng review thứ ba.
+> Đây là prompt nối tiếp các vòng sửa trước. Không làm lại dự án và không ưu tiên thêm tính năng mới.
 
 ---
 
-# 0. Mục tiêu vòng 3
+## 1. Mục tiêu
 
-Các vòng trước đã bổ sung:
+Bản hiện tại đã sửa được nhiều vấn đề lớn:
 
-- NextAuth JWT + Mongoose.
-- AI authentication/rate limit.
-- Service Worker privacy cleanup.
-- Invite code bắt buộc.
-- MongoDB transaction helper.
-- Bầu Cua settlement ledger.
-- Sharp image processing.
-- CSP/security headers.
-- Health endpoints.
-- API validation/pagination.
-- Soft-delete account.
-- CI MongoDB replica set.
+- Next.js `16.2.10`, NextAuth `4.24.14`.
+- Cookie NextAuth dùng mặc định.
+- CSP production đã bỏ `unsafe-eval`.
+- Bầu Cua có transaction, shared family state và settlement ledger.
+- Soft-delete credentials user đã sửa schema password.
+- Upload dùng Sharp và có cleanup job.
+- CI đã dựng MongoDB replica set.
+- Có audit event, request ID và migration script.
 
-Tuy nhiên các phần trên **chưa đủ bằng chứng để gọi production-ready**.
+Vòng này tập trung vào **reliability và bằng chứng test thật**:
 
-Mục tiêu vòng này:
-
-1. Vá dependency security trước.
-2. Sửa các race condition còn sót trong Bầu Cua.
-3. Chứng minh transaction bằng integration test thật.
-4. Sửa account deletion bị lỗi với credentials user.
-5. Bảo đảm last-admin invariant thực sự an toàn khi concurrency.
-6. Sửa quota/rate limit ở biên concurrency.
-7. Sửa partial failure của upload/Cloudinary/Photo metadata.
-8. Kiểm tra NextAuth cookie với middleware trong production.
-9. Làm CSP có giá trị bảo vệ thực tế.
-10. Biến CI thành quality gate thật, không chỉ có hình thức.
-
-Không ưu tiên thêm tính năng mới.
+1. CI không được che test failure.
+2. E2E phải chạy production server thật, không skip.
+3. Integration test phải gọi đúng service/route production.
+4. Transactional outbox phải được tạo cùng transaction.
+5. Cleanup worker phải claim job nguyên tử và có lease.
+6. Admin invariant không được drift.
+7. Game bootstrap không được tiếp tục transaction sau duplicate-key.
+8. Quota reservation phải idempotent thật.
+9. Migration phải đọc đúng collection và fail đúng exit code.
+10. Request ID phải xuyên middleware → route → audit.
 
 ---
 
-# 1. Vai trò
+## 2. Quy tắc bắt buộc
 
-Bạn là:
-
-- Staff Full-stack Engineer.
-- Application Security Engineer.
-- MongoDB Reliability Engineer.
-- CI/CD Engineer.
-- Next.js Production Engineer.
-
-Bạn phải trực tiếp:
-
-- Đọc code.
-- Lập kế hoạch.
-- Sửa code.
-- Viết test.
-- Chạy test.
-- Sửa lỗi phát sinh.
-- Cập nhật tài liệu.
-
-Không chỉ trả lời bằng lời khuyên.
-
----
-
-# 2. Quy tắc bắt buộc
-
-## 2.1. Baseline trước khi sửa
+### Baseline
 
 Chạy:
 
 ```bash
 git status
 git rev-parse HEAD
-git log --oneline -15
+git log --oneline -12
 node --version
 npm --version
 npm ci --legacy-peer-deps
 npm run lint
 npm run typecheck
-npm test
+npm run test:unit
+npm run test:security
 npm run test:integration
+npm run test:e2e
 npm run test:property
-npm run build
-npm audit --audit-level=high
-```
-
-Ghi bảng:
-
-| Kiểm tra | Kết quả | Ghi chú |
-|---|---|---|
-| Commit | | |
-| Install | | |
-| Lint | | |
-| Typecheck | | |
-| Unit tests | | |
-| Integration tests | | |
-| Property tests | | |
-| Build | | |
-| Audit | | |
-
-Nếu commit hiện tại mới hơn commit baseline, đọc diff trước rồi mới áp dụng yêu cầu.
-
-## 2.2. Không được làm
-
-- Không push trực tiếp `main`.
-- Không deploy.
-- Không dùng production database.
-- Không xóa dữ liệu thật.
-- Không commit secret.
-- Không tắt lint/typecheck/test.
-- Không dùng `@ts-ignore` để che lỗi.
-- Không mock transaction trong test được gọi là integration.
-- Không tuyên bố “atomic” nếu code có fallback non-transaction.
-- Không bỏ qua audit bằng `|| true`.
-- Không chuyển lỗi production thành warning.
-- Không swallow lỗi rộng bằng `catch {}` nếu lỗi không được phân loại.
-- Không thêm feature mới khi P0/P1 chưa pass.
-- Không ghi “production-ready” khi CI chưa xanh.
-
-## 2.3. Definition of Done
-
-Một mục chỉ hoàn thành khi:
-
-1. Có code fix.
-2. Có regression test.
-3. Test đó thất bại với code cũ.
-4. Test pass với code mới.
-5. Lint/typecheck/build pass.
-6. Tài liệu được cập nhật.
-7. Không tạo regression ở route/client khác.
-
----
-
-# 3. P0 — Nâng cấp Next.js ngay
-
-## 3.1. Phát hiện
-
-Repository đang dùng:
-
-```json
-"next": "16.1.6",
-"eslint-config-next": "16.1.6"
-```
-
-Next.js `16.1.6` nằm trong các dải phiên bản bị ảnh hưởng bởi nhiều security advisory năm 2026, trong đó có middleware/auth bypass. Dự án này đang dùng `withAuth` middleware để bảo vệ:
-
-```text
-/dashboard
-/family
-/events
-/photos
-/posts
-/games
-/admin
-/profile
-/ai
-```
-
-Vì vậy dependency này là P0, không phải nâng cấp tùy chọn.
-
-## 3.2. Yêu cầu
-
-Nâng:
-
-```text
-next
-eslint-config-next
-```
-
-lên ít nhất bản patch đã vá toàn bộ advisory áp dụng cho nhánh 16.2.
-
-Ưu tiên phiên bản stable mới nhất đã được kiểm tra tại thời điểm thực hiện, nhưng tối thiểu không thấp hơn:
-
-```text
-Next.js 16.2.6
-```
-
-Tài liệu Next.js hiện có thể mới hơn; không pin mù nếu đã có patch mới.
-
-Sau nâng cấp:
-
-```bash
-npm install next@latest eslint-config-next@latest --legacy-peer-deps
-npm dedupe
-npm run lint
-npm run typecheck
 npm test
 npm run build
 npm audit --audit-level=high
 ```
 
-Kiểm tra breaking changes giữa 16.1 và 16.2:
+Báo rõ:
 
-- Middleware/proxy behavior.
-- App Router.
-- Image optimization.
-- React Compiler.
-- Route handler params.
-- CSP nonce.
-- Build output.
-- ESLint config.
+- Số suite/test pass.
+- Số test fail.
+- Số test bị skip.
+- Test nào dùng DB thật.
+- Test nào mock.
+- E2E có start server thật hay không.
 
-## 3.3. NextAuth patch
+### Không được làm
 
-Repository đang dùng:
-
-```json
-"next-auth": "^4.24.13"
-```
-
-Nâng lên ít nhất:
-
-```text
-next-auth 4.24.14
-```
-
-hoặc patch stable mới nhất của v4 sau khi đọc release notes.
-
-Không nâng thẳng lên Auth.js v5 trong vòng này vì đó là migration lớn, trừ khi có lý do bảo mật bắt buộc và có test đầy đủ.
-
-## 3.4. Dependency cleanup
-
-Rà dependency thực sự được import.
-
-Ví dụ cần xác minh:
-
-```text
-@google/generative-ai
-```
-
-Nếu app hiện chỉ dùng MegaLLM và package không còn import runtime:
-
-- Xóa dependency.
-- Cập nhật lockfile.
-- Cập nhật docs.
-- Chạy build.
-
-Rà thêm dependency trùng chức năng hoặc legacy Supabase.
-
-## 3.5. Test bảo vệ route
-
-Thêm E2E test ở production build:
-
-```bash
-npm run build
-npm run start
-```
-
-Test anonymous user không truy cập được các protected route.
-
-Tối thiểu:
-
-- `/dashboard`
-- `/family`
-- `/admin`
-- `/profile`
-- `/games/bau-cua`
-
-Test thêm các request đặc biệt:
-
-- Next.js prefetch headers.
-- RSC headers.
-- URL có encoded segment.
-- URL có double slash.
-- Dynamic route.
-- Query string bất thường.
-
-Không tự tái tạo exploit nguy hiểm trên public target; chỉ test local application.
-
-## 3.6. Tiêu chí nghiệm thu
-
-- [ ] Next.js đã ở bản không thuộc advisory range.
-- [ ] `eslint-config-next` khớp version.
-- [ ] NextAuth patch mới.
-- [ ] Audit không còn high/critical chưa xử lý.
-- [ ] Protected-route E2E pass trên production build.
-- [ ] Build production pass.
-
-Nguồn chính thức cần đọc:
-
-```text
-https://github.com/vercel/next.js/security/advisories
-https://nextjs.org/docs/app/guides/upgrading/version-16
-https://github.com/nextauthjs/next-auth/releases
-```
+- Không deploy.
+- Không push thẳng `main`.
+- Không dùng production database.
+- Không thêm feature mới.
+- Không dùng `|| true`.
+- Không dùng dấu `;` để nối quality commands.
+- Không biến test thành `expect(true).toBe(true()`.
+- Không gọi test là integration nếu code production bị copy lại trong test.
+- Không source-string matching làm bằng chứng behavioral chính.
+- Không catch `E11000` trong transaction rồi tiếp tục dùng session.
+- Không swallow cleanup failure làm mất khả năng retry.
+- Không hard-code migration confirmation.
+- Không tuyên bố CI xanh nếu chưa có workflow run/check thật.
 
 ---
 
-# 4. P0 — Bầu Cua vẫn còn race giữa BET và ROLL
+# 3. P0 — CI đang có thể che unit-test failure
 
-## 4.1. Phát hiện
+Workflow hiện có:
 
-`bet/route.ts` hiện chạy transaction:
-
-```text
-read round(status=betting)
-→ reserve wallet
-→ create bet
-→ commit
+```yaml
+run: npm run test:unit ; npm run test:security
 ```
 
-`roll/route.ts` cũng chạy transaction:
+Nếu unit fail nhưng security pass, shell có thể trả exit code của command cuối.
 
-```text
-change round betting→rolling
-→ read bets
-→ update wallets
-→ create settlement
-→ complete round
-→ commit
+## Sửa
+
+Tách thành hai step:
+
+```yaml
+- name: Unit tests
+  run: npm run test:unit
+
+- name: Security tests
+  run: npm run test:security
 ```
-
-Tuy nhiên bet transaction chỉ **đọc** round. Nó không update/version-lock cùng document với roll.
-
-Tình huống:
-
-```text
-T1 BET đọc round=betting
-T2 ROLL update round=rolling
-T2 ROLL đọc danh sách bet chưa có bet của T1
-T2 ROLL settle và commit
-T1 BET reserve + insert bet rồi commit
-```
-
-Kết quả có thể là:
-
-- Bet tồn tại sau settlement.
-- Reserved balance bị orphan.
-- Bet không được tính.
-- Family state đã idle nhưng wallet còn reserved.
-
-Transaction không tự giải quyết race nếu hai transaction không tạo write conflict trên cùng invariant document.
-
-## 4.2. Thiết kế lock/version chung
-
-Mọi thao tác sau phải ghi/CAS cùng một document lock:
-
-```text
-BauCuaFamilyState
-```
-
-hoặc cùng `BauCuaRound.version`.
-
-### BET transaction
-
-Trong transaction:
-
-1. Đọc `BauCuaFamilyState`.
-2. Xác minh:
-   - `status=betting`
-   - `activeRoundId=roundId`
-   - version hiện tại.
-3. Update/CAS state hoặc round để tạo write conflict hợp lệ.
-4. Reserve wallet.
-5. Insert bet.
-6. Commit.
-
-Không tăng version tùy tiện làm client poll quá nhiều; có thể dùng field:
-
-```text
-betRevision
-```
-
-hoặc no-op-safe lock strategy được MongoDB hỗ trợ.
-
-### ROLL transaction
-
-Trong transaction:
-
-1. CAS cùng state/round từ betting sang rolling.
-2. Vì BET cũng write/CAS cùng invariant document, BET đang chạy phải:
-   - commit trước và được đọc trong snapshot hợp lệ;
-   - hoặc conflict/retry rồi thấy round không còn betting.
-3. Chỉ sau đó đọc bets và settle.
-
-Viết test chứng minh không tồn tại bet/reserved orphan.
-
-## 4.3. Không tiếp tục transaction sau duplicate-key abort
-
-`bet/route.ts` hiện bắt `E11000` bên trong transaction rồi tiếp tục query/update trong cùng callback.
-
-MongoDB transaction có thể đã bị abort sau write error. Không dựa vào việc tiếp tục operation trong session đó.
-
-Thiết kế lại:
-
-### Cách an toàn
-
-- Để transaction throw.
-- Transaction rollback toàn bộ reserve.
-- Bên ngoài transaction:
-  - Nếu lỗi duplicate idempotency key, query bet đã tồn tại.
-  - Trả idempotent response.
-- Không manual decrement trong transaction đã lỗi.
-
-Hoặc:
-
-- Claim idempotency record trước bằng thiết kế không gây abort.
-- Sau đó chạy transaction theo claim.
-
-## 4.4. Start round CAS
-
-`start/route.ts` hiện:
-
-- Đọc state.
-- Nếu idle thì tạo round.
-- Update state.
-
-Hai request đồng thời vẫn có thể cùng đọc idle.
-
-Sửa bằng CAS rõ:
-
-```text
-findOneAndUpdate(
-  {
-    familyId,
-    status: "idle",
-    version: expectedVersion
-  },
-  {
-    $set: { status: "starting" },
-    $inc: { version: 1 }
-  }
-)
-```
-
-Sau đó tạo round và gắn `activeRoundId` trong cùng transaction.
-
-Nếu CAS thất bại:
-
-- Đọc active round.
-- Trả existing round idempotently.
-- Không trả 500.
 
 Không dùng:
 
-```ts
-catch {
-  // concurrent create
-}
-```
-
-cho mọi loại lỗi. Chỉ bắt duplicate-key cụ thể.
-
-## 4.5. Settlement invariant
-
-Không sửa drift bằng:
-
-```ts
-if (reservedBalance < 0) {
-  reservedBalance = 0
-}
-```
-
-Đây là che lỗi dữ liệu.
-
-Thay bằng conditional update:
-
 ```text
-reservedBalance >= reservedExpected
+;
+|| true
+set +e
+continue-on-error
 ```
 
-Nếu không đúng:
+cho required quality gates.
 
-- Throw invariant error.
-- Rollback toàn transaction.
-- Ghi diagnostic/reconciliation record.
-- Không mark settlement completed.
+## Final gate
 
-Settlement ledger phải lưu:
+Tạo job:
 
-- roundId unique.
-- userId.
-- bet total.
-- reserved before.
-- net delta.
-- balance before/after.
-- timestamp.
-- state version.
-
-## 4.6. Existing settlement recovery
-
-Nếu settlement đã tồn tại nhưng round/family state chưa đồng bộ:
-
-- Không chỉ trả idempotent response.
-- Repair state trong transaction hoặc chạy recovery routine.
-- Round phải về terminal state.
-- Family state phải idle.
-- Response `myNet` phải lấy từ settlement entry của user, không trả cứng `0`.
-
-## 4.7. Transaction fallback
-
-`withMongoTransaction()` hiện có khả năng chạy:
-
-```ts
-operation(undefined)
+```yaml
+final-gate:
+  if: always()
+  needs:
+    - quality
+    - integration
+    - e2e
+    - build
+    - audit
 ```
 
-trên standalone MongoDB trong development.
+Final gate phải fail nếu bất kỳ job required nào:
 
-Đối với các operation bắt buộc consistency:
+- failure.
+- cancelled.
+- skipped không hợp lệ.
 
-```text
-Bầu Cua start
-Bầu Cua bet
-Bầu Cua roll
-Last-admin changes
-Account deletion
-Join approval
-```
+Branch protection chỉ cần check `final-gate`, nhưng final-gate phải phụ thuộc đầy đủ.
 
-phải gọi:
+## Kiểm tra
 
-```ts
-withMongoTransaction(operation, { requireReplicaSet: true })
-```
-
-ở mọi môi trường, kể cả test/dev.
-
-Không cho game chạy nontransactionally chỉ vì `NODE_ENV !== production`.
-
-Local developer thiếu replica set phải nhận lỗi cấu hình rõ ràng.
-
-## 4.8. Integration tests thật
-
-Tạo suite chạy với single-node replica set thật.
-
-Không mock Mongoose transaction.
-
-Test:
-
-1. 20 BET song song với tổng lớn hơn balance.
-2. BET và ROLL đồng thời 100 lần.
-3. Không có bet tạo sau settlement.
-4. Không có reservedBalance orphan.
-5. Hai ROLL chỉ một settlement.
-6. Retry ROLL trả đúng `myNet`.
-7. Hai START chỉ một active round.
-8. Duplicate idempotency key không reserve hai lần.
-9. Duplicate-key rollback không tiếp tục dùng aborted transaction.
-10. Invariant drift làm rollback, không clamp.
-11. Transaction unsupported trả 503.
-12. Settlement recovery sửa round/state lệch.
-13. Process simulation throw giữa wallet và settlement làm rollback toàn bộ.
-
-Sau test, assert:
-
-```text
-active rounds <= 1 per family
-settlement count <= 1 per round
-reservedBalance >= 0
-settled round has settlement
-idle family has no activeRoundId
-every bet in settled round is represented in settlement
-```
+- Cố ý tạo unit test fail trên branch test.
+- Xác nhận workflow fail.
+- Revert test.
+- Chạy lại workflow.
 
 ---
 
-# 5. P0 — Account deletion đang có bug với credentials account
+# 4. P0 — E2E hiện tự skip
 
-## 5.1. Phát hiện
-
-Deletion code hiện:
-
-```ts
-user.status = 'deleted'
-user.password = undefined
-await user.save()
-```
-
-Nhưng User schema vẫn quy định:
-
-```ts
-password.required = provider === 'credentials'
-```
-
-Với user đăng ký email/password, `save()` có thể fail validation vì password bị xóa trong khi provider vẫn là `credentials`.
-
-Unit test mock model không đủ để phát hiện lỗi schema thật này.
-
-## 5.2. Sửa schema/deletion policy
-
-Chọn một policy nhất quán.
-
-### Phương án đề xuất
-
-Password chỉ required khi:
+`tests/e2e-protected-routes.test.ts` chỉ chạy khi có:
 
 ```text
-provider=credentials AND status=active
+E2E_BASE_URL
 ```
 
-Ví dụ required function phải xét `this.status`.
+Nếu thiếu, suite chính bị skip và skip marker vẫn pass.
 
-Hoặc khi soft-delete:
+CI hiện không start production server trước E2E.
 
-- Chuyển provider sang trạng thái phù hợp không dùng đăng nhập.
-- Nhưng không đưa giá trị ngoài enum hiện tại nếu chưa migration.
+## Tạo E2E job thật
 
-Tốt hơn:
+1. Install.
+2. Start MongoDB replica set.
+3. Seed test database.
+4. `npm run build`.
+5. Start `npm run start`.
+6. Wait readiness.
+7. Set `E2E_BASE_URL`.
+8. Run E2E.
+9. Stop server.
+10. Upload server logs khi fail.
 
-```ts
-required() {
-  return this.provider === 'credentials' && this.status === 'active'
-}
+Ví dụ:
+
+```bash
+npm run build
+npm run start > /tmp/tet-e2e.log 2>&1 &
+SERVER_PID=$!
+trap 'kill $SERVER_PID || true' EXIT
+
+for i in $(seq 1 60); do
+  curl -fsS http://127.0.0.1:3000/api/health/ready && break
+  sleep 1
+done
+
+E2E_BASE_URL=http://127.0.0.1:3000 npm run test:e2e
 ```
 
-Đồng thời:
+Khi `CI=true` mà thiếu `E2E_BASE_URL`, test phải throw thay vì skip.
 
-- Unset password hash.
-- Bump sessionVersion.
-- Đảm bảo email anonymized không xung đột.
-- Không cho OAuth sign-in tạo lại account trên email anonymized.
+## E2E bắt buộc
 
-## 5.3. Account deletion phải transaction-safe
+Anonymous:
 
-Hiện deletion có nhiều bước không transaction:
+- `/dashboard`
+- `/family`
+- `/profile`
+- `/admin`
+- `/events`
+- `/photos`
+- `/posts`
+- `/games/bau-cua`
 
-```text
-check system admin count
-check family admin count
-check game
-transfer family
-save anonymized user
-delete memberships/content
-delete photos
-```
+Authenticated:
 
-Nếu lỗi giữa chừng, dữ liệu bị partial.
+- Credentials login.
+- Session cookie.
+- Dashboard access.
+- Protected API.
+- Logout.
+- Cookie cũ bị chặn.
 
-Tách thành:
+Session invalidation:
 
-### Transaction database
+- Login.
+- Bump `sessionVersion`.
+- Request tiếp theo bị từ chối.
 
-Trong một transaction:
+CSP:
 
-1. Lock user.
-2. Lock system-admin invariant.
-3. Lock từng family-admin invariant.
-4. Kiểm tra active game.
-5. Transfer ownership.
-6. Reassign/anonymize event/task references.
-7. Soft-delete user.
-8. Delete/anonymize DB records.
-9. Create storage cleanup jobs.
-10. Commit.
-
-### Storage cleanup ngoài transaction
-
-Dùng outbox/job:
-
-```text
-StorageCleanupJob
-- type
-- publicId
-- userId
-- attempts
-- status
-- lastError
-- nextRetryAt
-```
-
-Sau commit:
-
-- Xóa Cloudinary objects.
-- Mark cleanup complete.
-- Retry idempotently nếu lỗi.
-
-Không xóa `Photo` metadata trước khi giữ lại `publicId` để cleanup.
-
-## 5.4. Dangling references
-
-Rà tất cả model có user reference:
-
-- Family.createdBy.
-- Event.createdBy.
-- EventTask.assignedTo.
-- Post.userId.
-- Comment.userId.
-- Reaction.userId.
-- Photo.userId.
-- RSVP.userId.
-- Notification.userId.
-- FamilyJoinRequest.userId/reviewedBy.
-- BauCua host/bet/wallet/settlement entries.
-- Audit logs.
-
-Chọn rõ:
-
-- Transfer.
-- Anonymize.
-- Keep reference to soft-deleted user.
-- Delete.
-
-Không để populate trả null rồi API gọi `creator._id`.
-
-## 5.5. Cloudinary
-
-Account deletion hiện không được phép chỉ:
-
-```ts
-Photo.deleteMany()
-```
-
-Phải:
-
-1. Lấy toàn bộ `publicId`.
-2. Tạo cleanup outbox.
-3. Xóa DB metadata theo policy.
-4. Worker/route xử lý Cloudinary.
-5. Retry.
-6. Có audit.
-
-## 5.6. Idempotency
-
-Deletion lặp lại phải trả kết quả ổn định.
-
-Nếu lần đầu commit DB nhưng Cloudinary chưa cleanup:
-
-- Lần sau không báo hoàn tất giả.
-- Trả trạng thái:
-  - deleted.
-  - cleanupPending.
-- Không tạo duplicate cleanup job.
-
-## 5.7. Tests
-
-Integration tests thật:
-
-- Credentials user xóa thành công.
-- Google user xóa thành công.
-- Password validation không chặn deleted user.
-- JWT cũ bị vô hiệu.
-- Sole system admin bị chặn.
-- Sole family admin bị chặn.
-- Hai admin xóa đồng thời không để 0 admin.
-- Family ownership transfer đúng.
-- Event/task không dangling.
-- Cloudinary cleanup job được tạo.
-- Cleanup retry idempotent.
-- Active bet/reserved/host bị chặn.
-- Failure giữa transaction rollback toàn DB.
+- Production có CSP.
+- Không có `unsafe-eval`.
+- Trang render thành công.
 
 ---
 
-# 6. P0 — Last-admin invariant vẫn chưa concurrency-safe
+# 5. P0 — Integration test đang copy logic production
 
-## 6.1. Phát hiện
+`tests/bau-cua-mongo.integration.test.ts` định nghĩa lại các transaction tương tự route.
 
-Family member route hiện dùng transaction:
-
-```text
-count admin
-→ update/delete target admin
-```
-
-Nhưng hai transaction có thể:
+Điều này chỉ chứng minh code trong test hoạt động, không chứng minh:
 
 ```text
-T1 thấy adminCount=2
-T2 thấy adminCount=2
-T1 hạ admin A
-T2 hạ admin B
+app/api/games/bau-cua/start/route.ts
+app/api/games/bau-cua/bet/route.ts
+app/api/games/bau-cua/roll/route.ts
 ```
 
-Vì hai transaction cập nhật hai membership document khác nhau, có thể không có write conflict trên cùng document.
+đúng.
 
-System admin route vẫn dùng:
+`tests/bau-cua-concurrency.test.ts` còn đọc source và kiểm `toContain()`.
 
-```text
-countDocuments()
-→ targetUser.save()
-```
+`account-delete-mongo.integration.test.ts` mới test schema save, chưa gọi deletion transaction thật.
 
-không transaction.
-
-Profile deletion cũng count-then-act ngoài transaction.
-
-## 6.2. Central invariant lock
-
-Tạo document được mọi thao tác admin cùng write.
-
-### Family
-
-Có thể mở rộng Family hoặc tạo:
-
-```text
-FamilyAdminState
-- familyId unique
-- version
-- adminCount
-```
-
-Mọi thao tác:
-
-- Promote admin.
-- Demote admin.
-- Delete admin.
-- Account deletion.
-- Join/leave nếu liên quan admin.
-
-phải:
-
-1. CAS state/version.
-2. Xác minh `adminCount`.
-3. Update membership.
-4. Update count/version.
-5. Commit.
-
-### System
+## Tách production service
 
 Tạo:
 
 ```text
-SystemAdminState
-- key unique: "system-admin"
-- version
-- adminCount
+lib/services/bau-cua/start-round.ts
+lib/services/bau-cua/place-bet.ts
+lib/services/bau-cua/settle-round.ts
+lib/services/account/delete-account.ts
+lib/services/admin/change-system-role.ts
+lib/services/admin/change-family-role.ts
 ```
 
-Hoặc update một lock document chung trong transaction.
+Route chỉ:
 
-Mọi system role change/account deletion phải write cùng lock.
+1. Parse.
+2. Auth.
+3. Gọi service.
+4. Map error sang HTTP.
 
-Không dựa chỉ vào snapshot count.
+Integration tests phải import đúng service production.
 
-## 6.3. Reconciliation
+## Route tests
 
-Tạo script kiểm tra:
+Gọi route handler với:
+
+- `NextRequest`.
+- Auth helper mock tối thiểu.
+- MongoDB thật.
+- Không mock service/model đang được kiểm tra.
+
+Hoặc gọi HTTP qua E2E server.
+
+## Không coi source-string test là concurrency test
+
+Có thể giữ static-policy test, nhưng đổi tên rõ và không dùng làm bằng chứng chính.
+
+---
+
+# 6. P0 — Start game bắt duplicate-key trong transaction
+
+Start route hiện có flow:
 
 ```text
-actual admin count
-vs
-state adminCount
+state chưa tồn tại
+→ create state
+→ catch E11000
+→ tiếp tục query trong cùng transaction
 ```
 
-Dry-run mặc định.
+Write error có thể abort transaction. Không tiếp tục session đó.
 
-Có apply mode rõ để sửa state, không tự sửa membership tùy tiện.
+## Sửa
 
-## 6.4. Tests
+Ưu tiên một trong hai:
 
-- Hai family admins bị demote đồng thời.
-- Hai family admins bị delete đồng thời.
-- Role change đồng thời account deletion.
-- Hai system admins bị demote đồng thời.
-- System admin env override.
-- Retry transaction.
-- State count không lệch actual count.
+### A. Tạo state khi family được tạo
 
-Invariant cuối:
+- Family.
+- FamilyMember admin.
+- BauCuaFamilyState idle.
+- FamilyAdminState.
+
+Tạo trong cùng family-create transaction.
+
+Backfill family cũ bằng migration.
+
+### B. Ensure state trước transaction
+
+- Upsert state ngoài game transaction.
+- Sau đó transaction chỉ CAS state.
+
+### C. Để duplicate throw
+
+- Không catch trong callback.
+- Bên ngoài transaction retry bounded.
+
+## CAS cuối
+
+Update:
 
 ```text
-family admin count >= 1
-system admin count >= 1
+starting → betting
+```
+
+phải filter:
+
+- familyId.
+- status `starting`.
+- expected version.
+- expected activeRoundId/null.
+
+Kiểm tra kết quả update.
+
+Nếu update null:
+
+- Throw.
+- Rollback round create.
+- Không trả round orphan.
+
+## Tests DB thật
+
+- 20 start đồng thời khi state chưa tồn tại.
+- Duplicate bootstrap.
+- Không round orphan.
+- Không state kẹt `starting`.
+- ActiveRoundId luôn trỏ round tồn tại.
+- Tối đa một active round.
+
+---
+
+# 7. P0 — Admin invariant bootstrap và drift
+
+`ensureFamilyAdminState()` và `ensureSystemAdminState()` cũng:
+
+```text
+create state
+→ catch E11000
+→ tiếp tục trong transaction
+```
+
+Sửa giống game state: không tiếp tục transaction đã lỗi.
+
+## Drift hiện tại
+
+Nếu state đã tồn tại, helper trả counter trong state mà không đối chiếu actual count.
+
+State có thể lệch khi:
+
+- Credentials registration tạo admin theo `SYSTEM_ADMIN_EMAILS`.
+- Google OAuth tạo admin.
+- Thay đổi env admin list.
+- Seed/import.
+- Migration.
+- Direct repair.
+
+Ví dụ:
+
+```text
+SystemAdminState.adminCount=1
+→ register thêm admin từ env
+→ actual=2 nhưng state vẫn=1
+```
+
+## Thiết kế ưu tiên
+
+Dùng shared lock/version document để tạo write conflict, nhưng actual `User`/`FamilyMember` là nguồn sự thật.
+
+Trong transaction:
+
+1. CAS lock/version.
+2. Count actual.
+3. Kiểm invariant.
+4. Update role/membership.
+5. Increment version.
+6. Commit.
+
+Không cần counter lâu dài nếu counter dễ drift.
+
+Nếu giữ counter, mọi path tạo/promote/delete admin phải update counter:
+
+- Register.
+- Google sign-in.
+- Admin PATCH.
+- Account delete.
+- Family create.
+- Family member promote/demote/delete.
+- Seed/migration.
+
+## SYSTEM_ADMIN_EMAILS policy
+
+Ghi rõ:
+
+- Có tự promote user hiện có không?
+- Xóa email khỏi env có tự demote không?
+- Env role hay DB role ưu tiên?
+- Env admin có được demote qua UI không?
+- Reconciliation chạy khi nào?
+
+## Tests
+
+- Concurrent first bootstrap.
+- Register admin sau khi state tồn tại.
+- Google admin creation.
+- Concurrent demote/delete.
+- Account delete đồng thời role change.
+- State drift.
+- Không còn 0 admin.
+
+Phải dùng MongoDB replica set thật.
+
+---
+
+# 8. P0 — Account deletion outbox chưa atomic
+
+Deletion transaction hiện:
+
+1. Collect photo publicIds vào biến memory.
+2. Xóa Photo metadata.
+3. Commit DB transaction.
+4. Sau commit mới gọi `enqueueStorageCleanup()`.
+
+Nếu process chết sau commit nhưng trước enqueue:
+
+- User đã deleted.
+- Photo metadata mất.
+- Cloudinary object còn.
+- Không còn job và không còn source DB chứa publicId.
+
+Đây chưa phải transactional outbox.
+
+## Sửa
+
+Trong cùng transaction:
+
+1. Đọc Photo publicIds.
+2. Tạo StorageCleanupJob records.
+3. Soft-delete/anonymize user.
+4. Xóa metadata theo policy.
+5. Commit.
+
+Cleanup job phải truyền cùng `session`.
+
+Sau commit, HTTP response trả ngay; cron xử lý job.
+
+## Idempotency key
+
+Mỗi cleanup operation có unique key:
+
+```text
+account-delete:<userId>:<publicId>
+photo-delete:<photoId>:<publicId>
+upload-rollback:<operationId>:<publicId>
+```
+
+Retry deletion không tạo duplicate.
+
+## Audit
+
+Security-critical audit `account.deleted` nên:
+
+- Ghi trong cùng transaction.
+- Hoặc dùng audit outbox.
+
+Không chỉ best-effort sau commit nếu audit được dùng cho compliance.
+
+## Crash tests
+
+Inject lỗi:
+
+- Sau Photo delete.
+- Trước transaction commit.
+- Sau transaction commit.
+- Trước worker run.
+
+Kết quả:
+
+- Trước commit: rollback user + metadata + jobs.
+- Sau commit: cleanup job luôn tồn tại.
+
+---
+
+# 9. P0 — Cleanup model và worker chưa an toàn
+
+## Index không unique
+
+Schema có index `(publicId,status)` nhưng thiếu:
+
+```ts
+unique: true
+```
+
+Comment nói dedupe và code catch E11000, nhưng E11000 không thể xảy ra từ index không unique.
+
+Dùng unique `idempotencyKey`, không unique theo mutable status.
+
+## Worker không claim atomically
+
+Hiện:
+
+```text
+find pending list
+→ set job processing
+→ save
+→ destroy
+```
+
+Hai cron instance có thể cùng đọc và xử lý một job.
+
+## Thiết kế claim + lease
+
+Fields:
+
+```text
+idempotencyKey
+status
+leaseId
+leaseExpiresAt
+processingStartedAt
+attempts
+nextRetryAt
+```
+
+Claim:
+
+```ts
+findOneAndUpdate(
+  {
+    $or: [
+      { status: 'pending', nextRetryAt: { $lte: now } },
+      { status: 'processing', leaseExpiresAt: { $lt: now } }
+    ]
+  },
+  {
+    $set: {
+      status: 'processing',
+      leaseId,
+      leaseExpiresAt
+    },
+    $inc: { attempts: 1 }
+  },
+  {
+    sort: { nextRetryAt: 1 },
+    new: true
+  }
+)
+```
+
+Complete/fail filter thêm:
+
+```text
+_id
+leaseId
+status=processing
+```
+
+Worker cũ hết lease không được ghi đè worker mới.
+
+## Crash recovery
+
+Nếu process chết sau khi claim:
+
+- Sau lease expiry, job được reclaim.
+
+Không để `processing` vĩnh viễn.
+
+## Cloudinary result
+
+Phân loại:
+
+- `ok`: completed.
+- `not found`: idempotent completed.
+- transient: retry.
+- permanent invalid ID: failed/manual.
+
+## Local path traversal
+
+Với `local:` cleanup:
+
+- Resolve base `public/uploads`.
+- Resolve target.
+- Verify target nằm trong base.
+- Từ chối `..`, absolute path, null byte.
+
+Test:
+
+```text
+local:../../.env
+local:/etc/passwd
+local:uploads/../../../secret
 ```
 
 ---
 
-# 7. P0 — AI quota vẫn vượt giới hạn ở biên concurrency
+# 10. P1 — Rate-limit reservationId chưa có tác dụng
 
-## 7.1. Phát hiện
+`checkRateLimit()` tạo `reservationId` nhưng:
 
-AI route hiện:
+- Không lưu DB.
+- Không liên kết bucket.
+- Release không nhận reservationId.
+- Release lần hai vẫn decrement.
 
-1. Đọc success quota hiện tại.
-2. Nếu dưới limit thì gọi provider.
-3. Sau provider success mới `$inc` quota.
-4. Không kiểm tra `daily.allowed` sau increment.
+Comment “idempotent release” chưa đúng.
 
-Tình huống quota còn 1:
+## Tách abstraction
 
-```text
-10 request cùng đọc count=49
-10 request gọi provider
-10 request increment
-9 request vượt limit
-tất cả vẫn trả content
+### Attempt limiter
+
+```ts
+checkAttemptLimit()
 ```
 
-Quota trở thành 59 dù limit là 50.
+- Chỉ increment.
+- Không release.
+- Dùng cho request/minute và abuse.
 
-## 7.2. Reservation token
+### Reservable quota
 
-Thiết kế quota thành reservation.
-
-### Trước provider
-
-Atomic reserve:
-
-```text
-findOneAndUpdate(
-  count < limit,
-  $inc: { count: 1 }
-)
+```ts
+reserveQuota()
+consumeQuota()
+releaseQuota()
 ```
 
-Trả về:
+Dùng cho:
+
+- AI daily success quota.
+- Upload daily quota.
+
+## Reservation model
 
 ```text
-reservationId
+reservationId unique
 bucketKey
-windowStart
+scope
+subjectId
+status: reserved | consumed | released
 expiresAt
+createdAt
 ```
 
-Nếu không reserve được → 429 và không gọi provider.
+Reserve và bucket increment phải atomic.
 
-### Provider thất bại
+Release:
 
-Release đúng reservation:
+1. Find reservation status reserved.
+2. Mark released.
+3. Decrement exact bucket.
+4. Cùng transaction.
 
-- Dùng exact `bucketKey`, không tính lại bucket từ `Date.now()`.
-- Release idempotent theo `reservationId`.
-- Không decrement request khác.
+Release lần hai là no-op.
 
-### Provider thành công
+Consume:
 
-Commit reservation thành usage:
+- reserved → consumed.
+- Không increment lần nữa.
 
-- Mark reservation consumed.
-- Không cần increment lần hai.
-- Retry response không consume thêm.
-
-Model đề xuất:
-
-```text
-AiQuotaBucket
-AiQuotaReservation
-```
-
-hoặc một thiết kế gọn hơn nhưng phải có exact token/idempotency.
-
-## 7.3. Retry/idempotency
+## AI request idempotency
 
 Client gửi `requestId`.
 
-Unique theo:
+Unique:
 
 ```text
 userId + requestId
 ```
 
-Retry:
+Retry không:
 
-- Nếu completed → trả cached result hoặc metadata an toàn.
-- Nếu pending → 409/202 tùy policy.
-- Không gọi provider hai lần.
+- Gọi provider hai lần.
+- Consume quota hai lần.
+- Tạo hai kết quả.
 
-Không lưu traits/prompt nhạy cảm không cần thiết.
+Không lưu prompt/traits nếu không cần.
 
-## 7.4. Tests
+## Upload operation ID
 
-- Quota còn 1, 20 request đồng thời: chỉ 1 provider call được phép.
-- Provider timeout release reservation.
-- Provider 429 release reservation.
-- Response invalid release reservation.
-- Request qua UTC/day boundary release đúng bucket cũ.
-- Release hai lần không decrement hai lần.
-- Retry requestId không consume thêm.
-- `daily.allowed=false` không trả content.
+Retry upload không tạo hai Cloudinary objects.
 
 ---
 
-# 8. P1 — Rate limiter bucket race và secret handling
+# 11. P1 — Migration đang có thể đọc sai collection
 
-## 8.1. Concurrent upsert E11000
-
-Bucket rate limiter dùng:
+Migration hard-code:
 
 ```text
-findOneAndUpdate({ key }, {$inc}, { upsert:true })
+baucuaround
+baucuaWallets
 ```
 
-Hai request đầu bucket có thể cạnh tranh upsert unique key.
+Mongoose mặc định dùng plural/lowercase model name, ví dụ:
 
-Bắt duplicate-key:
+```text
+BauCuaRound → baucuarounds
+BauCuaWallet → baucuawallets
+```
 
-1. Nếu E11000:
-   - Retry một update không-upsert hoặc retry bounded.
-2. Không trả 500.
-3. Có jitter nhỏ nếu cần.
-4. Có concurrency test 100 requests.
+Audit có thể đọc collection rỗng và báo sai.
 
-## 8.2. Exact bucket release
+## Sửa
 
-`releaseRateLimit()` hiện tính bucket lại bằng thời gian hiện tại.
+Không hard-code đoán tên.
 
-Nếu request vượt qua boundary:
-
-- Reservation nằm bucket cũ.
-- Release bucket mới.
-- Quota cũ không được trả.
-- Bucket mới có thể bị decrement sai.
-
-Mọi reserve phải trả:
+Dùng:
 
 ```ts
+Model.collection.name
+Model.collection
+```
+
+Hoặc:
+
+```text
+listCollections()
+```
+
+và fail nếu expected collection không tồn tại.
+
+## Scan toàn DB
+
+Không dùng:
+
+```text
+famIds.slice(0, 500)
+```
+
+Dùng cursor/batch để scan tất cả.
+
+## Exit code
+
+Script hiện luôn exit 0 dù có findings.
+
+Tạo:
+
+```text
+migration:round4:audit
+migration:round4:audit:strict
+```
+
+- Audit thường xuất report, exit 0.
+- Strict có critical/error findings → exit 1.
+- CI dùng strict.
+
+## Apply safety
+
+Không tự:
+
+```text
+state idle + activeRoundId != null
+→ clear activeRoundId
+```
+
+trước khi kiểm round.
+
+Safe auto-fix chỉ khi:
+
+- Round không tồn tại.
+- Hoặc round terminal và settlement hoàn tất.
+
+Manual review khi:
+
+- Round betting/rolling.
+- Có bet.
+- Có reserved balance.
+- Missing settlement.
+
+## Confirmation
+
+Không hard-code:
+
+```text
+--confirm=YES
+```
+
+trong package script.
+
+Yêu cầu token chứa database name hoặc env riêng.
+
+## Migration tests
+
+- Đúng collection name.
+- >500 families.
+- Strict exit.
+- Dry-run không write.
+- Real active round không bị clear.
+- Terminal stale pointer được repair.
+- Apply idempotent.
+
+---
+
+# 12. P1 — Integration configuration vẫn có test giả
+
+`tests/rate-limit-concurrency.test.ts` mock:
+
+- Mongo connection.
+- RateLimit model.
+
+Nhưng file nằm trong integration config.
+
+Chuyển:
+
+- Mock test → unit suite.
+- Tạo `rate-limit-mongo.integration.test.ts` dùng collection thật.
+
+## Rate-limit DB tests
+
+- 100 concurrent first upserts.
+- Không E11000 ra API.
+- Count đúng.
+- Boundary window.
+- Exact bucket.
+- Reservation release hai lần.
+- TTL/index tồn tại.
+
+## Admin tests
+
+`tests/admin-invariant.test.ts` cũng mock model; đây là unit test, không phải integration.
+
+Tạo DB integration riêng.
+
+## Test classification
+
+Tên/file/config phải đúng:
+
+```text
+*.unit.test.ts
+*.integration.test.ts
+*.e2e.test.ts
+*.property.test.ts
+```
+
+Không đưa mocked test vào integration chỉ để tăng số lượng.
+
+---
+
+# 13. P1 — Transaction capability negative cache
+
+`supportsMongoTransactions()` cache kết quả false suốt process lifetime.
+
+Nếu probe đầu lỗi tạm thời:
+
+- Cache false.
+- Các route transaction trả 503 cho tới restart.
+
+## Sửa
+
+- Positive result cache lâu.
+- Negative result TTL ngắn.
+- Phân biệt:
+  - DB unavailable.
+  - Probe timeout.
+  - Unsupported standalone.
+  - Permission error.
+- Có retry.
+- Hoặc chạy transaction trực tiếp và map server error.
+
+Test:
+
+- First probe fail.
+- Second probe success.
+- Reconnect.
+- Managed Mongo hello.
+- Standalone thật.
+
+---
+
+# 14. P1 — Request ID chưa xuyên request path
+
+Middleware hiện set `X-Request-Id` trên response, nhưng chưa clone/set request headers cho downstream route.
+
+Audit thường nhận requestId null.
+
+## Sửa middleware
+
+```ts
+const requestHeaders = new Headers(req.headers)
+requestHeaders.set('x-request-id', requestId)
+
+const res = NextResponse.next({
+  request: {
+    headers: requestHeaders,
+  },
+})
+
+res.headers.set('x-request-id', requestId)
+```
+
+Route:
+
+```ts
+const requestId = getOrCreateRequestId(request)
+```
+
+Truyền vào:
+
+- AuditEvent.
+- Error log.
+- Cleanup job.
+- AI provider log.
+- Game settlement log.
+
+Không tin incoming ID từ internet mù; validate hoặc luôn tạo server ID.
+
+Test cùng ID ở:
+
+- Response.
+- Route.
+- Audit DB.
+- Error log.
+
+---
+
+# 15. P1 — Audit metadata chỉ sanitize top-level
+
+Metadata sanitizer hiện chỉ kiểm key cấp đầu.
+
+Nested secret có thể lọt:
+
+```json
 {
-  bucketKey,
-  reservationId?,
-  ...
+  "request": {
+    "password": "...",
+    "inviteCode": "..."
+  }
 }
 ```
 
-Release dùng exact key/token.
+## Recursive sanitizer
 
-## 8.3. Không lưu raw invite code trong rate-limit key
+Yêu cầu:
 
-Join route đang dùng:
+- Case-insensitive blocked keys.
+- Recursive object/array.
+- Depth limit.
+- Item count limit.
+- String max length.
+- Circular-safe.
+- Date/ObjectId safe.
+- Không lưu request body nguyên khối.
 
-```text
-join:code:<RAW_INVITE_CODE>
-```
+Test:
 
-Dù không log, code vẫn được lưu trong MongoDB.
+- Nested password.
+- Nested token.
+- Array secrets.
+- Mixed-case `Authorization`.
+- Circular object.
+- Huge metadata.
 
-Hash bằng HMAC hoặc SHA-256 với namespace:
+## Durable vs best-effort audit
 
-```text
-join:code:<hash>
-```
+Phân loại:
 
-Không dùng raw secret.
+### Durable
 
-## 8.4. Tránh burn shared code bucket
+- System role.
+- Family admin role.
+- Account deletion.
+- Invite rotation.
+- Game settlement.
 
-Join route hiện increment user/IP/code counters song song.
+Ghi cùng transaction hoặc audit outbox.
 
-Attacker có thể làm code bucket cạn và chặn thành viên thật.
+### Best-effort
 
-Flow tốt hơn:
+- Non-critical analytics.
 
-1. Check user/IP attempt limiter.
-2. Validate invite format.
-3. Lookup invite.
-4. Apply per-family abuse limiter theo policy hợp lý.
-5. Không cho một user/IP duy nhất burn shared family bucket quá dễ.
-
-Hoặc shared limiter phải có threshold/risk model khác.
-
-## 8.5. Retry-After
-
-Route đang tính `retry` nhưng không trả header.
-
-Luôn trả:
-
-```text
-Retry-After
-```
-
-và có thể trả `retryAfterSeconds`.
+Không dùng best-effort rồi tuyên bố audit trail đầy đủ.
 
 ---
 
-# 9. P1 — Upload có partial failure sau Photo.create
+# 16. P1 — CSP tiếp tục theo lộ trình, không bật mù
 
-## 9.1. Phát hiện
+Production đã bỏ `unsafe-eval`, giữ lại.
 
-Upload flow:
-
-```text
-upload Cloudinary
-→ Photo.create
-→ photo.populate
-→ build response
-```
-
-Catch sau `Photo.create` hiện cleanup Cloudinary/local file, nhưng không xóa Photo document đã tạo.
-
-Nếu:
-
-- `Photo.create` thành công.
-- `populate` lỗi.
-- Response serialization lỗi.
-
-thì:
-
-- Cloudinary object bị xóa.
-- Photo document còn URL trỏ tới object không tồn tại.
-- Quota được release.
-- Metadata bị hỏng.
-
-## 9.2. Sửa flow
-
-Tách rõ các trạng thái:
+Hiện vẫn có:
 
 ```text
-storage uploaded
-metadata persisted
-response formatted
+unsafe-inline
 ```
 
-Nếu lỗi sau Photo.create:
+Không gọi đây là strict CSP.
 
-- Xóa Photo document trong cleanup.
-- Xóa storage object.
-- Nếu một cleanup lỗi, tạo outbox.
-- Không release quota nếu policy coi metadata đã persisted; tốt hơn rollback cả hai.
+## Lộ trình
 
-Có thể dùng compensating transaction/outbox:
+1. Tạo strict CSP Report-Only.
+2. Thu thập violation.
+3. E2E browser.
+4. Route-group policy.
+5. Enforce sau khi hết violation hợp lệ.
 
-```text
-UploadOperation
-- id
-- userId
-- familyId
-- publicId
-- photoId
-- status
-```
+Nonce CSP có tradeoff:
 
-## 9.3. Cloudinary cleanup không được swallow
+- Dynamic rendering.
+- Mất static optimization.
+- CDN/cache impact.
+- Tăng server load.
 
-`destroyCloudinary()` hiện chỉ log và bỏ qua.
+Đánh giá riêng:
 
-Tạo cleanup job khi:
+- Public landing.
+- Authenticated app.
 
-- destroy lỗi.
-- timeout.
-- Cloudinary unavailable.
+Không ép toàn app dynamic nếu không cần.
 
-Admin diagnostics hiển thị cleanup pending count.
-
-## 9.4. Output size
-
-Sharp re-encode có thể tạo output lớn hơn input, đặc biệt PNG.
-
-Sau processing:
-
-```text
-processed.buffer.length <= MAX_PROCESSED_BYTES
-```
-
-Nếu lớn:
-
-- Resize/compress.
-- Hoặc reject rõ.
-
-## 9.5. Privacy DTO
-
-Upload response không cần trả uploader email nếu UI chỉ hiển thị tên/avatar.
-
-Xóa email khỏi:
-
-- Photo upload response.
-- Post feed.
-- Event response.
-- Family members response nếu member không cần xem email.
-
-Nếu email thực sự là feature, ghi rõ privacy policy và quyền.
-
-## 9.6. Tests
-
-- Cloudinary success + Photo.create fail.
-- Photo.create success + populate fail.
-- Photo.create success + response formatting fail nếu tách helper test được.
-- Cloudinary destroy fail tạo cleanup job.
-- Output re-encoded quá lớn.
-- Quota boundary crossing.
-- Email không xuất hiện trong public family DTO.
-
----
-
-# 10. P1 — NextAuth cookie và middleware production test
-
-## 10.1. Phát hiện cần xác minh
-
-Auth config tự đặt cookie:
-
-```text
-next-auth.session-token
-secure=true ở production
-```
-
-NextAuth mặc định có thể dùng secure cookie prefix trên HTTPS.
-
-Custom cookie là cấu hình nâng cao và có thể làm middleware/token lookup không đồng bộ nếu các phần không dùng cùng cookie name.
-
-Không khẳng định bug chỉ dựa vào đọc code. Phải chứng minh bằng E2E production.
-
-## 10.2. Lựa chọn ưu tiên
-
-Nếu không có lý do bắt buộc:
-
-- Xóa custom `cookies.sessionToken`.
-- Dùng default secure cookie behavior của NextAuth.
-
-Nếu phải custom:
-
-- Dùng `__Secure-` prefix production.
-- Đồng bộ cookieName với middleware/getToken theo tài liệu.
-- Cấu hình đầy đủ options.
-- Test HTTP local và HTTPS-like production proxy.
-
-## 10.3. E2E
-
-Production build:
-
-1. Login credentials.
-2. Nhận session cookie.
-3. Truy cập `/dashboard`.
-4. Truy cập API auth-required.
-5. Middleware nhận đúng token.
-6. Logout.
-7. Route protected bị chặn.
-8. Bump sessionVersion.
-9. Cookie cũ bị chặn.
-
-Test Google OAuth callback bằng mock provider hoặc route-level integration phù hợp; không cần gọi Google thật trong CI.
-
----
-
-# 11. P1 — CSP production vẫn quá yếu
-
-## 11.1. Phát hiện
-
-Production CSP hiện có:
-
-```text
-script-src 'self' 'unsafe-inline' 'unsafe-eval'
-```
-
-`unsafe-eval` không cần cho Next.js/React production theo tài liệu Next.js.
-
-CSP này có header nhưng chưa cung cấp mức bảo vệ XSS mong muốn.
-
-## 11.2. Sửa tối thiểu ngay
-
-Chỉ thêm `unsafe-eval` ở development:
-
-```ts
-const scriptSrc = production
-  ? "script-src 'self' 'unsafe-inline'"
-  : "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-```
-
-## 11.3. Strict CSP
-
-Sau khi nâng Next.js, đánh giá:
-
-### Nonce CSP
-
-- Generate nonce mỗi request.
-- `script-src 'nonce-...' 'strict-dynamic'`.
-- Gửi nonce vào request header và response CSP.
-- Exclude API/static/image/prefetch matcher.
-- Chấp nhận dynamic rendering cho route dùng nonce.
-
-### Hoặc SRI
-
-Nếu muốn giữ static landing:
-
-- Đánh giá experimental SRI.
-- Không bật production mù.
-- Test build/runtime.
-
-Có thể triển khai theo phase:
-
-1. Bỏ `unsafe-eval` production ngay.
-2. CSP Report-Only strict nonce.
-3. Theo dõi violation.
-4. Enforce sau khi test.
-
-## 11.4. Middleware matcher
-
-Không cần chạy CSP/protected middleware trên mọi API/static asset.
-
-Theo tài liệu Next.js, loại trừ:
-
-- `api` nếu API có security headers riêng.
-- `_next/static`.
-- `_next/image`.
-- favicon.
-- prefetch requests.
-
-Nhưng auth API authorization vẫn phải được enforce trong route helper; middleware không phải lớp duy nhất.
-
-## 11.5. Tests
-
-- Production CSP không có `unsafe-eval`.
-- Development CSP có thể có `unsafe-eval`.
-- Protected pages load không CSP violation nghiêm trọng.
-- Cloudinary/Google avatar load.
-- Landing page render đúng.
-- API response không bị nonce logic làm hỏng.
-- Report-only/enforce mode rõ ràng.
-
-Nguồn chính thức:
+Nguồn:
 
 ```text
 https://nextjs.org/docs/app/guides/content-security-policy
@@ -1304,481 +1044,112 @@ https://nextjs.org/docs/app/guides/content-security-policy
 
 ---
 
-# 12. P1 — CI hiện dựng replica set nhưng không chạy integration tests
+# 17. P2 — Registration và Google creation
 
-## 12.1. Phát hiện
+Credentials register route cần:
 
-Workflow đã chạy MongoDB replica set, nhưng step test chỉ gọi:
+- Type validation trước `.trim()`.
+- Max lengths.
+- Normalize email.
+- Rate limit user/IP.
+- Duplicate email race xử lý E11000.
+- Không trả 500 cho duplicate.
 
-```bash
-npm run test:ci
-```
+Nếu role tạo ra là admin:
 
-Trong package:
+- Admin invariant phải update trong cùng transaction.
 
-```json
-"test:ci": "npm run test:unit"
-```
+Google sign-in:
 
-Vitest default lại exclude:
-
-```text
-integration
-property
-TSX component suites
-```
-
-Vì vậy replica set được dựng nhưng transaction integration suite không được chạy.
-
-`tests/mongo-transaction-unit.test.ts` còn mock Mongoose và chỉ test fallback standalone; nó không chứng minh transaction thật.
-
-## 12.2. Script mới
-
-Thiết kế:
-
-```json
-{
-  "test:unit": "vitest run --config vitest.unit.config.ts",
-  "test:integration": "vitest run --config vitest.integration.config.ts",
-  "test:security": "vitest run --config vitest.security.config.ts",
-  "test:property": "vitest run --config vitest.property.config.ts",
-  "test:e2e": "playwright test",
-  "test:ci": "npm run test:unit && npm run test:security && npm run test:integration",
-  "deploy:check": "npm run lint && npm run typecheck && npm run test:ci && npm run build && npm run validate:env"
-}
-```
-
-Không cần đúng tên config trên nếu có cấu trúc sạch tương đương.
-
-## 12.3. Integration config
-
-- Không mock `mongoose`.
-- Dùng database riêng theo worker.
-- Fail nếu URI chứa Atlas/public production host.
-- Drop test database sau suite.
-- Serial hoặc isolation phù hợp transaction tests.
-- Index được tạo trước test.
-- Replica set PRIMARY ready thật.
-
-## 12.4. CI split jobs
-
-Có thể tách:
-
-```text
-quality:
-- lint
-- typecheck
-- unit
-
-integration:
-- Mongo replica set
-- integration/security
-
-build:
-- production build
-
-audit:
-- npm audit
-```
-
-Ưu điểm:
-
-- Log rõ.
-- Không mất thời gian dựng Mongo cho lint.
-- Required checks riêng.
-
-## 12.5. Audit không được luôn xanh
-
-Xóa:
-
-```bash
-npm audit --audit-level=high || true
-```
-
-Chọn:
-
-- Fail high/critical.
-- Hoặc allowlist vulnerability có:
-  - advisory ID.
-  - lý do.
-  - owner.
-  - expiry date.
-
-Không allowlist vô thời hạn.
-
-## 12.6. CI status
-
-Sau khi push branch/PR:
-
-- Xác nhận workflow thực sự chạy.
-- Không chỉ dựa vào file YAML.
-- Đọc log.
-- Đính kèm kết quả trong báo cáo cuối.
+- Hai callback đồng thời cùng email.
+- Unique race phải idempotent.
+- Admin invariant update.
+- Deleted account không được tự revive.
 
 ---
 
-# 13. P1 — API migration chưa hoàn tất
+# 18. P2 — UI/component test không được bỏ quên
 
-## 13.1. Legacy DTO
-
-Posts/events vẫn trả cả:
+Default Vitest include có thể chỉ bắt:
 
 ```text
-familyId
-family_id
-userId
-user_id
-createdAt
-created_at
+tests/**/*.test.ts
 ```
 
-Và còn trả email.
+Các `.test.tsx` có thể không chạy.
 
-Hoàn tất migration:
-
-1. Tìm toàn bộ client đang đọc snake_case.
-2. Chuyển client sang camelCase.
-3. Thêm test contract.
-4. Xóa legacy aliases.
-5. Cập nhật docs.
-
-Nếu cần deprecation period:
-
-- Tạo API version.
-- Không giữ alias vô thời hạn.
-- Ghi deadline.
-
-## 13.2. Cursor validation
-
-`decodeCursor()` hiện validate date nhưng không validate cursor `id` là Mongo ObjectId.
-
-Sửa:
-
-- Validate exact cursor schema.
-- Validate ObjectId.
-- Giới hạn decoded payload size.
-- Invalid cursor trả 400 thay vì silently trở thành first page.
-- Có version field nếu cursor format có thể đổi.
-- Có optional HMAC nếu không muốn client sửa cursor.
-
-Test:
-
-- Invalid base64.
-- JSON quá lớn.
-- Invalid date.
-- Invalid ObjectId.
-- Extra fields.
-- Same timestamp stable ordering.
-- Asc/desc pagination không duplicate/miss.
-
-## 13.3. Email privacy
-
-Mặc định DTO family content chỉ trả:
+Tạo config include:
 
 ```text
-id
-name
-avatar
+tests/**/*.test.{ts,tsx}
 ```
 
-Email chỉ trả ở:
+Phân loại:
 
-- Profile của chính user.
-- Admin endpoint có quyền.
-- Family contact feature nếu explicit và có privacy setting.
+- Component unit.
+- Integration.
+- E2E.
 
-Rà:
+Property test:
 
-- Posts.
-- Events.
-- Photos.
-- Members.
-- Comments.
-- RSVP.
-- Join requests.
-
-## 13.4. Delete consistency
-
-Xóa event phải xử lý:
-
-- Tasks.
-- RSVP.
-- Notifications.
-- Invite/calendar references.
-
-Xóa post phải xử lý:
-
-- Comments.
-- Reactions.
-- Notifications nếu có.
-
-Dùng transaction hoặc soft-delete + cleanup outbox.
+- Chạy nightly hoặc PR theo path.
+- Không archive vĩnh viễn.
 
 ---
 
-# 14. P1 — Health diagnostics secret separation
-
-## 14.1. Phát hiện
-
-Diagnostics token hiện fallback sang:
-
-```text
-CRON_SECRET
-```
-
-Điều này tái sử dụng secret cho hai quyền:
-
-- Trigger cron.
-- Đọc internal diagnostics.
-
-Tách:
-
-```text
-HEALTH_DIAGNOSTICS_TOKEN
-CRON_SECRET
-```
-
-Không fallback chéo production.
-
-Nếu thiếu diagnostics token:
-
-- Diagnostics fail closed.
-- Cron vẫn hoạt động với cron secret riêng.
-
-## 14.2. Replica detection
-
-Diagnostics dùng `replSetGetStatus`, có thể bị từ chối quyền trên managed MongoDB dù transaction vẫn được hỗ trợ.
-
-Dùng `hello`:
-
-```text
-setName
-msg === "isdbgrid"
-logicalSessionTimeoutMinutes
-```
-
-hoặc thử transaction capability an toàn.
-
-Không báo unsupported chỉ vì user không có quyền admin command.
-
-## 14.3. HTTP status
-
-Diagnostics DB degraded nên cân nhắc 503 thay vì 200, tùy monitoring contract.
-
-Ghi rõ:
-
-- `/health`: liveness.
-- `/health/ready`: readiness.
-- `/health/diagnostics`: protected detail.
-
----
-
-# 15. P2 — Code quality và vận hành
-
-## 15.1. Structured audit log
-
-Không chỉ:
-
-```ts
-console.log('[audit]', ...)
-```
-
-Tạo model/service:
-
-```text
-AuditEvent
-- actorId
-- familyId?
-- action
-- targetType
-- targetId
-- metadata safe
-- createdAt
-- requestId
-```
-
-Không lưu:
-
-- Invite code.
-- Password.
-- AI prompt/traits.
-- Tokens.
-- Cloudinary secret.
-
-Audit các hành động:
-
-- Role change.
-- Account deletion.
-- Invite regenerate.
-- Join approve/reject.
-- Game start/settlement/cancel.
-- Cleanup failure.
-- Admin action.
-
-## 15.2. Correlation ID
-
-Middleware/route helper tạo request ID.
-
-Trả:
-
-```text
-X-Request-Id
-```
-
-Log lỗi theo ID.
-
-Không trả stack/raw DB error.
-
-## 15.3. Error classification
-
-Thay catch rộng bằng error types:
-
-- ValidationError.
-- AuthError.
-- ConflictError.
-- TransactionNotSupportedError.
-- InvariantViolation.
-- ExternalServiceError.
-- CleanupPendingError.
-
-Không swallow mọi lỗi trong “concurrent create”.
-
-## 15.4. Observability
-
-Theo dõi:
-
-- AI provider latency/error.
-- Game settlement failures.
-- Transactions retry.
-- Cleanup pending.
-- Cron results.
-- Upload processing time.
-- Rate-limit rejection.
-- Readiness failures.
-
-Không log PII thừa.
-
----
-
-# 16. Migration/audit script vòng 3
+# 19. Migration round 4 audit
 
 Tạo:
 
 ```bash
-npm run migration:round3:audit
-npm run migration:round3:apply
+npm run migration:round4:audit
+npm run migration:round4:audit:strict
+npm run migration:round4:apply -- --confirm=<token>
 ```
 
-Audit mặc định read-only.
+Audit:
 
-Kiểm tra:
+- Actual collection names.
+- Cleanup duplicate jobs.
+- Processing jobs hết lease.
+- Deleted user photos không có cleanup job.
+- Game state/round/settlement drift.
+- State `starting` quá timeout.
+- Bet timestamp sau settlement.
+- Reserved orphan.
+- Family/system admin drift.
+- Raw invite rate keys.
+- Negative rate count.
+- Critical audit thiếu request ID.
+- Wrong collection artifacts từ migration cũ.
 
-- User deleted nhưng còn password.
-- Credentials deleted user vi phạm schema policy.
-- Photo metadata có URL/publicId thiếu.
-- Cloudinary cleanup pending.
-- Round settled nhưng không có settlement.
-- Settlement nhưng round chưa terminal.
-- Family state idle nhưng activeRoundId còn.
-- Family state active nhưng round không tồn tại.
-- Reserved balance âm.
-- Reserved balance >0 ở settled round.
-- Bet không nằm trong settlement.
-- Family có 0 admin.
-- System có 0 admin.
-- Admin state count lệch actual.
-- User dangling references.
-- Raw invite code trong RateLimit key.
-- Rate-limit bucket count âm.
-- Duplicate active round.
-- Legacy snake_case client dependency nếu có thể static scan.
-
-Apply mode:
-
-- Có confirmation flag.
-- Idempotent.
-- Backup instructions.
-- Không tự settle game bằng random mới.
-- Không xóa Cloudinary không xác minh ownership.
-- Ghi audit output.
+Apply chỉ sửa case chắc chắn an toàn.
 
 ---
 
-# 17. Test matrix bắt buộc
+# 20. CI jobs bắt buộc
 
-## 17.1. Dependency/security
+```text
+quality
+integration
+e2e
+build
+audit
+migration-audit
+final-gate
+```
 
-- Next upgraded.
-- Middleware protected routes.
-- Prefetch/RSC route checks.
-- CSP production.
-- Cookie production.
+Sau khi push branch:
 
-## 17.2. Bầu Cua
-
-- Start concurrency.
-- Bet concurrency.
-- Bet-vs-roll race.
-- Roll concurrency.
-- Settlement replay.
-- Crash rollback.
-- Invariant drift.
-- Unsupported transaction.
-- Recovery.
-
-## 17.3. Account deletion
-
-- Credentials.
-- Google.
-- JWT invalidation.
-- Last admin.
-- Ownership transfer.
-- Cloudinary cleanup.
-- Idempotency.
-- Partial failure rollback.
-
-## 17.4. Quota/rate limit
-
-- Bucket initial upsert race.
-- Boundary rollover.
-- Exact release.
-- AI quota last slot concurrency.
-- Invite abuse.
-- Raw secret not stored.
-
-## 17.5. Upload
-
-- Pixel bomb.
-- Multi-frame.
-- MIME mismatch.
-- Output oversized.
-- DB partial failure.
-- Populate failure.
-- Cleanup retry.
-- Quota exact release.
-
-## 17.6. API
-
-- Cursor malformed.
-- CamelCase contract.
-- No unnecessary email.
-- Pagination stable.
-- Delete cascade.
-
-## 17.7. CI
-
-- Unit job.
-- Integration job.
-- Build job.
-- Audit job.
-- No ignored high advisory.
-- Latest commit status green.
+- Mở PR.
+- Xác nhận workflow thực sự chạy.
+- Đọc từng job.
+- Ghi run URL/ID.
+- Không chỉ nói YAML đúng.
 
 ---
 
-# 18. Lệnh kiểm tra cuối
-
-Bắt buộc chạy:
+# 21. Lệnh cuối
 
 ```bash
 npm ci --legacy-peer-deps
@@ -1787,309 +1158,264 @@ npm run typecheck
 npm run test:unit
 npm run test:security
 npm run test:integration
-npm run test:property
 npm run test:e2e
+npm run test:property
 npm test
 npm run build
 npm run validate:env
-npm run migration:round3:audit
+npm run migration:round4:audit
+npm run migration:round4:audit:strict
 npm audit --audit-level=high
 ```
 
-Nếu một script chưa tồn tại, tạo script đúng thay vì bỏ qua.
+Nếu dùng actionlint:
 
-Nếu E2E không chạy được trong môi trường hiện tại:
+```bash
+npx actionlint
+```
 
-- Viết test.
-- Cấu hình CI.
-- Ghi rõ chưa có bằng chứng run.
-- Không đánh dấu pass giả.
+Không đánh dấu E2E pass nếu suite skip.
 
 ---
 
-# 19. Checklist production gate
-
-## Dependency
-
-- [ ] Next.js không còn trong advisory range.
-- [ ] NextAuth patch hiện hành.
-- [ ] Audit high/critical sạch hoặc allowlist có expiry.
-- [ ] Dependency thừa được xóa.
-
-## Auth
-
-- [ ] Middleware production E2E pass.
-- [ ] Cookie name/default behavior thống nhất.
-- [ ] SessionVersion invalidation pass.
-- [ ] Protected routes không phụ thuộc duy nhất vào middleware; API vẫn auth server-side.
-
-## Game
-
-- [ ] Bet và roll write-conflict trên cùng invariant lock/version.
-- [ ] Không có bet sau settlement.
-- [ ] Không reserved orphan.
-- [ ] Start CAS idempotent.
-- [ ] Duplicate idempotency không tiếp tục aborted transaction.
-- [ ] Settlement replay trả đúng myNet.
-- [ ] Negative reserved không bị clamp che lỗi.
-- [ ] Real replica-set concurrency tests pass.
-
-## Account deletion
-
-- [ ] Credentials deletion pass với schema thật.
-- [ ] Google deletion pass.
-- [ ] DB deletion transaction-safe.
-- [ ] Cloudinary cleanup outbox.
-- [ ] Không dangling reference.
-- [ ] Last-admin invariant concurrency-safe.
-- [ ] JWT cũ bị chặn.
-
-## Quota
-
-- [ ] AI last-slot concurrency đúng.
-- [ ] Exact reservation/release.
-- [ ] Rate-limit first-upsert không 500.
-- [ ] Invite code không lưu raw.
-- [ ] Shared limiter không dễ bị burn.
-
-## Upload
-
-- [ ] Photo.create partial failure cleanup đủ DB + storage.
-- [ ] Cleanup retry.
-- [ ] Processed output size limit.
-- [ ] No unnecessary email.
-- [ ] Pixel/frame tests pass.
-
-## CSP/Health
-
-- [ ] Production không có unsafe-eval.
-- [ ] Strict CSP rollout có test.
-- [ ] Middleware matcher hợp lý.
-- [ ] Diagnostics không dùng CRON_SECRET.
-- [ ] Replica detection không phụ thuộc privileged command.
+# 22. Checklist nghiệm thu
 
 ## CI
 
-- [ ] CI thực sự chạy integration tests.
-- [ ] Replica set được dùng bởi tests.
-- [ ] Audit không `|| true`.
-- [ ] Workflow run latest commit green.
-- [ ] Build production green.
+- [ ] Không còn dấu `;` che exit code.
+- [ ] Không `|| true`.
+- [ ] Có final gate.
+- [ ] E2E chạy server thật.
+- [ ] Latest PR checks xanh.
+
+## Tests
+
+- [ ] Integration gọi production service.
+- [ ] Route handler được test.
+- [ ] Không copy transaction logic.
+- [ ] Mock test không nằm integration suite.
+- [ ] TSX tests được include.
+- [ ] Skipped tests được báo.
+
+## Game
+
+- [ ] State bootstrap không tiếp tục sau duplicate.
+- [ ] CAS cuối được kiểm kết quả.
+- [ ] Không round orphan.
+- [ ] Concurrent start test DB thật.
+
+## Admin
+
+- [ ] Bootstrap an toàn.
+- [ ] Registration/Google cập nhật invariant.
+- [ ] Env policy rõ.
+- [ ] Drift audit toàn DB.
+- [ ] Last-admin concurrency DB thật.
+
+## Outbox
+
+- [ ] Cleanup job tạo trong business transaction.
+- [ ] Unique idempotency key thật.
+- [ ] Atomic claim.
+- [ ] Lease/reclaim.
+- [ ] Local path traversal blocked.
+- [ ] Crash không làm mất cleanup.
+
+## Quota
+
+- [ ] Reservation được persist.
+- [ ] Release idempotent.
+- [ ] Attempt limiter tách quota.
+- [ ] AI/upload retry không double charge.
+
+## Migration
+
+- [ ] Đúng collection name.
+- [ ] Scan toàn DB.
+- [ ] Strict exit code.
+- [ ] Không auto-clear active game mơ hồ.
+- [ ] Apply confirmation không hard-code.
+
+## Observability
+
+- [ ] Request ID xuyên response/route/audit.
+- [ ] Critical audit durable.
+- [ ] Metadata recursive sanitize.
 
 ---
 
-# 20. Format báo cáo cuối của Grok
+# 23. Format báo cáo cuối
 
 ## A. Baseline
 
-| Hạng mục | Kết quả |
-|---|---|
-| Commit | |
-| Node/npm | |
-| Install | |
-| Lint | |
-| Typecheck | |
-| Unit | |
-| Integration | |
-| Property | |
-| E2E | |
-| Build | |
-| Audit | |
-
-## B. Findings verification
-
-| ID | Phát hiện | Đúng/Sai/Một phần | Bằng chứng |
+| Command | Result | Skipped | DB thật/mock |
 |---|---|---|---|
 
-## C. Dependency security
+## B. Finding verification
 
-| Package | Trước | Sau | Advisory/Reason |
-|---|---:|---:|---|
+| ID | Finding | Confirmed/Partial/False | Evidence |
+|---|---|---|---|
 
-## D. File changed
+## C. Changed files
 
-| File | Thay đổi | Test |
+| File | Change | Test |
 |---|---|---|
 
-## E. Database consistency
+## D. Behavioral evidence
 
-- Transaction boundaries.
-- Shared invariant locks.
-- Indexes.
-- Migration.
-- Recovery.
-- Rollback.
+| Scenario | Production implementation called | Result |
+|---|---|---|
 
-## F. Concurrency evidence
+## E. Concurrency
 
-| Scenario | Số request | Expected | Actual |
+| Scenario | Requests/workers | Expected | Actual |
 |---|---:|---|---|
 
-## G. Security evidence
+## F. CI
 
-- Auth middleware.
-- Cookie.
-- CSP.
-- Invite.
-- Quota.
-- Health secrets.
-- Upload privacy.
+| Job | Run URL/ID | Status |
+|---|---|---|
 
-## H. CI evidence
+## G. Migration
 
-- Workflow URL/run ID.
-- Jobs.
-- Failed/retried steps.
-- Final status.
+- Collections resolved.
+- Documents scanned.
+- Findings.
+- Exit code.
+- Dry-run/apply result.
 
-## I. Commands
+## H. Remaining risk
 
-| Command | Result |
-|---|---|
-| `npm run lint` | |
-| `npm run typecheck` | |
-| `npm run test:unit` | |
-| `npm run test:security` | |
-| `npm run test:integration` | |
-| `npm run test:property` | |
-| `npm run test:e2e` | |
-| `npm run build` | |
-| `npm audit --audit-level=high` | |
+| Severity | Risk | Reason | Next action |
+|---|---|---|---|
 
-## J. Remaining risks
+Không ghi production-ready nếu:
 
-Mỗi risk phải có:
-
-- Severity.
-- File/module.
-- Impact.
-- Why not fixed.
-- Owner/next action.
-- Deadline.
-
-Không ghi “production-ready” nếu bất kỳ P0 nào còn mở.
+- E2E skip.
+- Latest CI chưa chạy.
+- Outbox chưa atomic.
+- Cleanup chưa lease.
+- Admin state còn drift.
+- Integration test còn copy logic.
 
 ---
 
-# 21. Thứ tự thực hiện ngay
+# 24. Thứ tự thực hiện
 
-Thực hiện đúng thứ tự:
+1. Baseline và đếm skip.
+2. Sửa CI dấu `;`.
+3. Tạo final gate.
+4. Tạo E2E production job.
+5. Tách production services.
+6. Chuyển integration tests sang services/routes thật.
+7. Sửa game/admin bootstrap.
+8. Sửa admin drift.
+9. Đưa cleanup jobs vào account deletion transaction.
+10. Thêm unique operation key + worker lease.
+11. Tách limiter/quota reservation.
+12. Sửa migration.
+13. Truyền request ID.
+14. Harden audit sanitizer.
+15. Đánh giá strict CSP report-only.
+16. Chạy toàn bộ gate.
+17. Push PR và xác minh Actions.
+18. Báo cáo đúng format.
 
-1. Baseline và audit.
-2. Nâng Next.js/NextAuth.
-3. Chạy build/test sau dependency upgrade.
-4. Sửa Bầu Cua BET-vs-ROLL lock/version.
-5. Sửa duplicate transaction handling.
-6. Viết real concurrency tests.
-7. Sửa credentials account deletion.
-8. Thiết kế deletion transaction + cleanup outbox.
-9. Sửa family/system last-admin invariant.
-10. Sửa AI quota reservation.
-11. Sửa rate-limit exact bucket/retry/hash.
-12. Sửa upload partial failure.
-13. E2E NextAuth cookie/middleware.
-14. Bỏ unsafe-eval production và cải thiện CSP.
-15. Hoàn tất camelCase/privacy/cursor validation.
-16. Tách diagnostics secret.
-17. Sửa CI chạy integration/audit thật.
-18. Migration audit.
-19. Chạy toàn bộ production gate.
-20. Báo cáo theo mục 20.
-
-Không dừng sau phân tích. Hãy trực tiếp sửa repository.
+Không dừng ở review. Hãy trực tiếp sửa code và cung cấp bằng chứng test.
 
 ---
 
-# 22. Tài liệu chính thức cần đối chiếu
+# 25. Tài liệu chính thức
 
 ```text
-Next.js security advisories
-https://github.com/vercel/next.js/security/advisories
-
-Next.js CSP guide
+Next.js CSP:
 https://nextjs.org/docs/app/guides/content-security-policy
 
-Next.js version 16 upgrade guide
-https://nextjs.org/docs/app/guides/upgrading/version-16
-
-Mongoose transactions
+Mongoose transactions:
 https://mongoosejs.com/docs/transactions.html
 
-MongoDB transaction production considerations
-https://www.mongodb.com/docs/manual/core/transactions-production-consideration/
+Mongoose model/collection naming:
+https://mongoosejs.com/docs/models.html
 
-NextAuth options/cookies
+NextAuth options/cookies:
 https://next-auth.js.org/configuration/options
 
-NextAuth releases
-https://github.com/nextauthjs/next-auth/releases
+MongoDB transaction considerations:
+https://www.mongodb.com/docs/manual/core/transactions-production-consideration/
 
-GitHub Actions service containers
-https://docs.github.com/en/actions/tutorials/use-containerized-services/use-docker-service-containers
-
-OWASP File Upload Cheat Sheet
-https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+GitHub Actions:
+https://docs.github.com/en/actions
 ```
 
 Ưu tiên:
 
-1. Behavior được integration test.
+1. Behavior từ test gọi implementation production.
 2. Tài liệu chính thức.
-3. Source code framework/package.
-4. Không dựa vào suy đoán hoặc commit message.
+3. Source framework/package.
+4. Không tin commit message nếu code/test không chứng minh.
 
 ---
 
-# 23. Lời nhắc cuối
+# 26. Lời nhắc cuối
 
-Các commit trước đã bổ sung nhiều lớp bảo vệ, nhưng file tồn tại không đồng nghĩa behavior đã đúng.
-
-Đặc biệt không được nhầm:
+Không nhầm:
 
 ```text
-“có transaction helper”
+“có integration test file”
 ```
 
 với:
 
 ```text
-“đã chứng minh transaction correctness dưới concurrency”
+“production implementation được integration test”
 ```
 
-Không được nhầm:
+Không nhầm:
 
 ```text
-“có CI YAML”
+“có outbox helper”
 ```
 
 với:
 
 ```text
-“latest commit đã chạy và pass CI”
+“outbox record commit cùng transaction”
 ```
 
-Không được nhầm:
+Không nhầm:
 
 ```text
-“có CSP header”
+“index có comment dedupe”
 ```
 
 với:
 
 ```text
-“CSP đủ mạnh để giảm XSS”
+“index unique thật”
 ```
 
-Không được nhầm:
+Không nhầm:
 
 ```text
-“soft-delete”
+“CI YAML tồn tại”
 ```
 
 với:
 
 ```text
-“account deletion không partial và không rò storage”
+“latest commit có checks xanh”
 ```
 
-Bắt đầu chạy baseline ngay, sau đó sửa P0 trước.
+Không nhầm:
+
+```text
+“migration chạy không lỗi”
+```
+
+với:
+
+```text
+“migration đọc đúng collection và exit đúng”
+```
+
+Bắt đầu baseline ngay và sửa P0 trước.

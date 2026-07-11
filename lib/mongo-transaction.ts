@@ -8,44 +8,50 @@ export class TransactionNotSupportedError extends Error {
   }
 }
 
-let replicaSetChecked = false
-let replicaSetSupported = false
+const NEGATIVE_TTL_MS = 15_000
+const POSITIVE_TTL_MS = 5 * 60_000
+
+let cachedSupported: boolean | null = null
+let cacheExpiresAt = 0
 
 /** Test helper: clear cached capability probe after reconnect. */
 export function resetMongoTransactionCache(): void {
-  replicaSetChecked = false
-  replicaSetSupported = false
+  cachedSupported = null
+  cacheExpiresAt = 0
 }
 
 /**
  * Detect whether the connected deployment supports multi-document transactions.
  * Prefer hello (no replSetGetStatus privileges required on managed MongoDB).
+ * Negative results are cached only briefly so transient probe failures recover.
  */
 export async function supportsMongoTransactions(): Promise<boolean> {
-  if (replicaSetChecked) return replicaSetSupported
+  const now = Date.now()
+  if (cachedSupported !== null && now < cacheExpiresAt) {
+    return cachedSupported
+  }
+
   await connectDB()
 
   try {
     const admin = mongoose.connection.db?.admin()
     if (!admin) {
-      replicaSetSupported = false
-    } else {
-      const status = await admin.command({ hello: 1 }).catch(() => null)
-      replicaSetSupported = Boolean(
-        status &&
-          (status.setName ||
-            status.msg === 'isdbgrid' ||
-            // Some managed configs expose sessions without setName in edge cases
-            (typeof status.logicalSessionTimeoutMinutes === 'number' &&
-              status.setName))
-      )
+      cachedSupported = false
+      cacheExpiresAt = now + NEGATIVE_TTL_MS
+      return false
     }
+    const status = await admin.command({ hello: 1 }).catch(() => null)
+    const supported = Boolean(
+      status && (status.setName || status.msg === 'isdbgrid')
+    )
+    cachedSupported = supported
+    cacheExpiresAt = now + (supported ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS)
+    return supported
   } catch {
-    replicaSetSupported = false
+    cachedSupported = false
+    cacheExpiresAt = now + NEGATIVE_TTL_MS
+    return false
   }
-
-  replicaSetChecked = true
-  return replicaSetSupported
 }
 
 /**

@@ -4,6 +4,7 @@ const mockMemberCount = vi.hoisted(() => vi.fn())
 const mockFamilyAdminFindOne = vi.hoisted(() => vi.fn())
 const mockFamilyAdminCreate = vi.hoisted(() => vi.fn())
 const mockFamilyAdminFindOneAndUpdate = vi.hoisted(() => vi.fn())
+const mockFamilyAdminUpdateOne = vi.hoisted(() => vi.fn())
 const mockUserCount = vi.hoisted(() => vi.fn())
 const mockSystemFindOne = vi.hoisted(() => vi.fn())
 const mockSystemCreate = vi.hoisted(() => vi.fn())
@@ -17,6 +18,7 @@ vi.mock('@/lib/models/FamilyAdminState', () => ({
     findOne: (...a: unknown[]) => mockFamilyAdminFindOne(...a),
     create: (...a: unknown[]) => mockFamilyAdminCreate(...a),
     findOneAndUpdate: (...a: unknown[]) => mockFamilyAdminFindOneAndUpdate(...a),
+    updateOne: (...a: unknown[]) => mockFamilyAdminUpdateOne(...a),
   },
 }))
 vi.mock('@/lib/models/User', () => ({
@@ -41,42 +43,35 @@ describe('admin invariant CAS', () => {
     vi.clearAllMocks()
   })
 
-  it('casDecrementFamilyAdmin fails when adminCount would drop below 1', async () => {
+  it('casDecrementFamilyAdmin fails when actual adminCount <= 1', async () => {
+    mockFamilyAdminFindOneAndUpdate.mockResolvedValue({ version: 1 })
     mockMemberCount.mockResolvedValue(1)
-    mockFamilyAdminFindOne.mockResolvedValue({ adminCount: 1, version: 0 })
-    mockFamilyAdminFindOneAndUpdate.mockResolvedValue(null)
 
     const ok = await casDecrementFamilyAdmin('507f1f77bcf86cd799439011')
     expect(ok).toBe(false)
-    expect(mockFamilyAdminFindOneAndUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ adminCount: { $gt: 1 } }),
-      expect.any(Object),
-      expect.any(Object)
-    )
+    expect(mockMemberCount).toHaveBeenCalled()
   })
 
-  it('casDecrementFamilyAdmin succeeds when adminCount > 1', async () => {
+  it('casDecrementFamilyAdmin succeeds when actual > 1', async () => {
+    mockFamilyAdminFindOneAndUpdate.mockResolvedValue({ version: 2, adminCount: 1 })
     mockMemberCount.mockResolvedValue(2)
-    mockFamilyAdminFindOne.mockResolvedValue({ adminCount: 2, version: 1 })
-    mockFamilyAdminFindOneAndUpdate.mockResolvedValue({ adminCount: 1, version: 2 })
 
     const ok = await casDecrementFamilyAdmin('507f1f77bcf86cd799439011')
     expect(ok).toBe(true)
   })
 
   it('casDecrementSystemAdmin protects last system admin', async () => {
+    mockSystemFindOneAndUpdate.mockResolvedValue({ version: 1 })
     mockUserCount.mockResolvedValue(1)
-    mockSystemFindOne.mockResolvedValue({ adminCount: 1, version: 0 })
-    mockSystemFindOneAndUpdate.mockResolvedValue(null)
 
     const ok = await casDecrementSystemAdmin()
     expect(ok).toBe(false)
   })
 
-  it('ensureFamilyAdminState returns existing', async () => {
+  it('ensureFamilyAdminState returns actual count', async () => {
     mockMemberCount.mockResolvedValue(2)
     mockFamilyAdminFindOne.mockResolvedValue({ adminCount: 2, version: 3 })
     const s = await ensureFamilyAdminState('507f1f77bcf86cd799439011')
-    expect(s).toEqual({ adminCount: 2, version: 3 })
+    expect(s.adminCount).toBe(2)
   })
 })

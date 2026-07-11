@@ -6,10 +6,15 @@ import { getOrCreateRequestId, REQUEST_ID_HEADER } from '@/lib/request-id'
 
 export default withAuth(
   function middleware(req: NextRequest) {
+    // Always mint server-side request id (validated if incoming)
     const requestId = getOrCreateRequestId(req)
-    const res = NextResponse.next()
+    const requestHeaders = new Headers(req.headers)
+    requestHeaders.set(REQUEST_ID_HEADER, requestId)
+
+    const res = NextResponse.next({
+      request: { headers: requestHeaders },
+    })
     res.headers.set(REQUEST_ID_HEADER, requestId)
-    // CSP enforced by default; set CSP_REPORT_ONLY=true to measure only
     return applySecurityHeaders(res, {
       production: process.env.NODE_ENV === 'production',
     })
@@ -56,8 +61,6 @@ export default withAuth(
 )
 
 export const config = {
-  // Skip API routes (they enforce auth server-side), static assets, and images.
-  // Auth pages and public landing still get CSP via this middleware when matched.
   matcher: [
     '/((?!api/|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|css|map|woff2?)$).*)',
   ],

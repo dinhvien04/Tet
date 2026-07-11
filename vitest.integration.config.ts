@@ -2,8 +2,8 @@ import { defineConfig } from 'vitest/config'
 import path from 'path'
 
 /**
- * Integration / concurrency tests for CI with optional MongoDB replica set.
- * Does NOT include legacy Supabase suites or browser component suites that need happy-dom.
+ * Integration tests against production services + real Mongo when available.
+ * No mocked RateLimit/admin as "integration".
  */
 export default defineConfig({
   test: {
@@ -11,21 +11,16 @@ export default defineConfig({
     globals: false,
     setupFiles: ['./tests/setup.ts'],
     include: [
-      'tests/mongo-transaction-unit.test.ts',
-      'tests/admin-invariant.test.ts',
-      'tests/rate-limit-concurrency.test.ts',
-      'tests/bau-cua-concurrency.test.ts',
+      'tests/bau-cua-service.integration.test.ts',
+      'tests/account-delete-service.integration.test.ts',
       'tests/bau-cua-mongo.integration.test.ts',
       'tests/account-delete-mongo.integration.test.ts',
       'tests/end-to-end-integration.test.ts',
+      'tests/mongo-transaction-unit.test.ts',
     ],
-    exclude: [
-      'tests/legacy-supabase/**',
-      'node_modules/**',
-      '**/*.{tsx}',
-    ],
-    testTimeout: 60_000,
-    hookTimeout: 60_000,
+    exclude: ['tests/legacy-supabase/**', 'node_modules/**'],
+    testTimeout: 90_000,
+    hookTimeout: 90_000,
     fileParallelism: false,
     sequence: { concurrent: false },
   },

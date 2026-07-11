@@ -40,29 +40,107 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Create family
-    const family = await Family.create({
-      name: name.trim(),
-      inviteCode,
-      createdBy: session.user.id,
-    })
+    // Create family + admin membership + bootstrap state docs
+    const {
+      withMongoTransaction,
+      TransactionNotSupportedError,
+    } = await import('@/lib/mongo-transaction')
+    const BauCuaFamilyState = (await import('@/lib/models/BauCuaFamilyState')).default
+    const FamilyAdminState = (await import('@/lib/models/FamilyAdminState')).default
 
-    // Add creator as admin
+    const creatorId = session.user.id
+    let family
     try {
-      await FamilyMember.create({
-        familyId: family._id,
-        userId: session.user.id,
-        role: 'admin',
-      })
-    } catch (memberError) {
-      console.error('Error adding family member:', memberError)
-      // Rollback: delete the family
-      await Family.findByIdAndDelete(family._id)
-      
-      return NextResponse.json(
-        { error: 'Không thể thêm thành viên' },
-        { status: 500 }
+      family = await withMongoTransaction(
+        async (mongoSession) => {
+          const [fam] = await Family.create(
+            [
+              {
+                name: name.trim(),
+                inviteCode,
+                createdBy: creatorId,
+              },
+            ],
+            mongoSession ? { session: mongoSession } : undefined
+          )
+          await FamilyMember.create(
+            [
+              {
+                familyId: fam._id,
+                userId: creatorId,
+                role: 'admin',
+              },
+            ],
+            mongoSession ? { session: mongoSession } : undefined
+          )
+          await BauCuaFamilyState.create(
+            [
+              {
+                familyId: fam._id,
+                activeRoundId: null,
+                status: 'idle',
+                version: 0,
+                betRevision: 0,
+                updatedAt: new Date(),
+              },
+            ],
+            mongoSession ? { session: mongoSession } : undefined
+          )
+          await FamilyAdminState.create(
+            [
+              {
+                familyId: fam._id,
+                adminCount: 1,
+                version: 0,
+                updatedAt: new Date(),
+              },
+            ],
+            mongoSession ? { session: mongoSession } : undefined
+          )
+          return fam
+        },
+        { requireReplicaSet: false }
       )
+    } catch (e) {
+      if (e instanceof TransactionNotSupportedError) {
+        // Dev fallback without RS: sequential create with best-effort bootstrap
+        family = await Family.create({
+          name: name.trim(),
+          inviteCode,
+          createdBy: creatorId,
+        })
+        await FamilyMember.create({
+          familyId: family._id,
+          userId: creatorId,
+          role: 'admin',
+        })
+        try {
+          await BauCuaFamilyState.create({
+            familyId: family._id,
+            activeRoundId: null,
+            status: 'idle',
+            version: 0,
+            betRevision: 0,
+          })
+        } catch {
+          /* ignore bootstrap race */
+        }
+        try {
+          await FamilyAdminState.create({
+            familyId: family._id,
+            adminCount: 1,
+            version: 0,
+          })
+        } catch {
+          /* ignore */
+        }
+      } else {
+        console.error('Error creating family:', e)
+        return NextResponse.json(
+          { error: 'Không thể tạo nhà' },
+          { status: 500 }
+        )
+      }
     }
 
     return NextResponse.json({
@@ -70,8 +148,8 @@ export async function POST(request: NextRequest) {
       family: {
         id: family._id.toString(),
         name: family.name,
-        invite_code: family.inviteCode,
-        created_at: family.createdAt,
+        inviteCode: family.inviteCode,
+        createdAt: family.createdAt,
       },
     })
   } catch (error) {

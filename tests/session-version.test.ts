@@ -1,6 +1,5 @@
 /**
  * JWT sessionVersion invalidation contract.
- * Auth options bump sessionVersion on delete and reject mismatched tokens.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'fs'
@@ -15,12 +14,12 @@ describe('sessionVersion invalidation', () => {
     expect(src).toContain('sessionVersion')
     expect(src).toContain('token.sessionVersion !== resolvedUser.sessionVersion')
     expect(src).toContain('token.sessionVersion = -1')
-    expect(src).toContain('session.user.id = \'\'')
+    expect(src).toContain("session.user.id = ''")
   })
 
-  it('account deletion bumps sessionVersion', () => {
+  it('account deletion service bumps sessionVersion', () => {
     const src = fs.readFileSync(
-      path.join(process.cwd(), 'app/api/profile/route.ts'),
+      path.join(process.cwd(), 'lib/services/account/delete-account.ts'),
       'utf8'
     )
     expect(src).toMatch(/sessionVersion\s*=\s*\(user\.sessionVersion/)
@@ -33,7 +32,7 @@ describe('sessionVersion invalidation', () => {
       return tokenSv === dbSv
     }
     expect(isTokenValid(0, 0)).toBe(true)
-    expect(isTokenValid(0, 1)).toBe(false) // after account delete bump
+    expect(isTokenValid(0, 1)).toBe(false)
     expect(isTokenValid(-1, 1)).toBe(false)
   })
 })

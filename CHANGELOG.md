@@ -2,6 +2,14 @@
 
 ## Unreleased / main
 
+### Round 4 — Reliability & real test evidence (2026-07)
+- CI: separate unit/security steps, e2e job with production server, `final-gate`
+- Production services: `startBauCuaRound`, `placeBauCuaBet`, `settleBauCuaRound`, `deleteUserAccount`
+- Transactional storage cleanup outbox + atomic claim/lease worker
+- Family create bootstraps BauCuaFamilyState + FamilyAdminState
+- Integration tests call production services; E2E fails in CI without `E2E_BASE_URL`
+- Request ID cloned into request headers; migration uses model collections + strict exit
+
 ### Round 3 — Production hardening (2026-07)
 - Next.js 16.2.10 + NextAuth 4.24.14; removed unused `@google/generative-ai`
 - Bầu Cua: FamilyState lock (betRevision + betting→rolling CAS), start idle→starting CAS, no aborted-tx continue, reserved invariant without clamp, requireReplicaSet

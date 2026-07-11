@@ -1,95 +1,125 @@
 /**
- * Round 3 consistency audit / limited apply.
+ * Round 3/4 consistency audit / limited apply.
+ *
+ * Uses Mongoose model collection names (not hard-coded guesses).
  *
  * Usage:
  *   node scripts/migration-round3.js --mode=audit
- *   node scripts/migration-round3.js --mode=apply --confirm=YES
- *
- * Read-only by default. Apply only repairs admin state counters and
- * family state idle mismatches — never auto-settles games with new dice.
+ *   node scripts/migration-round3.js --mode=audit --strict
+ *   MIGRATION_CONFIRM=<dbname> node scripts/migration-round3.js --mode=apply --confirm=<dbname>
  */
 
-const mongoose = require('mongoose')
+const path = require('path')
+// Load ts compiled paths via relative requires of compiled models is hard;
+// use mongoose models after dynamic import of built dist is unavailable —
+// connect and use collection names from mongoose model registration.
 
-const args = process.argv.slice(2)
-const mode =
-  args.find((a) => a.startsWith('--mode='))?.split('=')[1] || 'audit'
-const confirm =
-  args.find((a) => a.startsWith('--confirm='))?.split('=')[1] || ''
+async function main() {
+  const mongoose = require('mongoose')
+  const args = process.argv.slice(2)
+  const mode =
+    args.find((a) => a.startsWith('--mode='))?.split('=')[1] || 'audit'
+  const confirm =
+    args.find((a) => a.startsWith('--confirm='))?.split('=')[1] || ''
+  const strict = args.includes('--strict')
 
-function assertSafeUri(uri) {
+  const uri = process.env.MONGODB_URI
   if (!uri) {
     console.error('MONGODB_URI is required')
     process.exit(1)
   }
   const lower = uri.toLowerCase()
-  if (
-    lower.includes('mongodb.net') &&
-    !process.env.ALLOW_PROD_MIGRATION
-  ) {
-    console.error(
-      'Refusing Atlas URI without ALLOW_PROD_MIGRATION=1. Audit against a safe DB.'
-    )
+  if (lower.includes('mongodb.net') && !process.env.ALLOW_PROD_MIGRATION) {
+    console.error('Refusing Atlas URI without ALLOW_PROD_MIGRATION=1')
     process.exit(1)
   }
-}
-
-async function main() {
-  const uri = process.env.MONGODB_URI
-  assertSafeUri(uri)
 
   await mongoose.connect(uri)
-  const db = mongoose.connection.db
+
+  // Register models
+  require(path.join(__dirname, '../lib/models/User.ts'))
+  // Use .js paths won't work — register schemas inline for script stability
+  const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema({}, { strict: false }))
+  const FamilyMember =
+    mongoose.models.FamilyMember ||
+    mongoose.model('FamilyMember', new mongoose.Schema({}, { strict: false }))
+  const BauCuaRound =
+    mongoose.models.BauCuaRound ||
+    mongoose.model('BauCuaRound', new mongoose.Schema({}, { strict: false }))
+  const BauCuaSettlement =
+    mongoose.models.BauCuaSettlement ||
+    mongoose.model('BauCuaSettlement', new mongoose.Schema({}, { strict: false }))
+  const BauCuaFamilyState =
+    mongoose.models.BauCuaFamilyState ||
+    mongoose.model('BauCuaFamilyState', new mongoose.Schema({}, { strict: false }))
+  const BauCuaWallet =
+    mongoose.models.BauCuaWallet ||
+    mongoose.model('BauCuaWallet', new mongoose.Schema({}, { strict: false }))
+  const Photo =
+    mongoose.models.Photo ||
+    mongoose.model('Photo', new mongoose.Schema({}, { strict: false }))
+  const RateLimit =
+    mongoose.models.RateLimit ||
+    mongoose.model('RateLimit', new mongoose.Schema({}, { strict: false }))
+  const StorageCleanupJob =
+    mongoose.models.StorageCleanupJob ||
+    mongoose.model('StorageCleanupJob', new mongoose.Schema({}, { strict: false }))
+
   const findings = []
+  const critical = []
 
-  const users = db.collection('users')
-  const familyMembers = db.collection('familymembers')
-  const familyAdminStates = db.collection('familyadminstates')
-  const systemAdminStates = db.collection('systemadminstates')
-  const rounds = db.collection('baucuaround')
-  const settlements = db.collection('baucuasettlements')
-  const familyStates = db.collection('baucuafamilystates')
-  const wallets = db.collection('baucuaWallets')
-  const rateLimits = db.collection('ratelimits')
-  const photos = db.collection('photos')
-
-  // 1. Deleted credentials users still with password
-  const deletedWithPassword = await users
-    .find({ status: 'deleted', password: { $exists: true, $ne: null } })
-    .project({ _id: 1, email: 1 })
-    .toArray()
-  if (deletedWithPassword.length) {
-    findings.push({
-      id: 'deleted-with-password',
-      count: deletedWithPassword.length,
-      sample: deletedWithPassword.slice(0, 5).map((u) => u._id.toString()),
-    })
+  // Verify collections exist via model names
+  const db = mongoose.connection.db
+  const existing = new Set(
+    (await db.listCollections().toArray()).map((c) => c.name)
+  )
+  const expected = [
+    User.collection.name,
+    FamilyMember.collection.name,
+    BauCuaRound.collection.name,
+    BauCuaWallet.collection.name,
+    BauCuaFamilyState.collection.name,
+  ]
+  for (const name of expected) {
+    if (!existing.has(name)) {
+      findings.push({ id: 'missing-collection', collection: name, severity: 'error' })
+      critical.push('missing-collection:' + name)
+    }
   }
 
-  // 2. Photos missing publicId/url
-  const badPhotos = await photos.countDocuments({
+  const deletedWithPassword = await User.countDocuments({
+    status: 'deleted',
+    password: { $exists: true, $ne: null },
+  })
+  if (deletedWithPassword) {
+    findings.push({ id: 'deleted-with-password', count: deletedWithPassword })
+  }
+
+  const badPhotos = await Photo.countDocuments({
     $or: [{ publicId: { $in: [null, ''] } }, { url: { $in: [null, ''] } }],
   })
   if (badPhotos) findings.push({ id: 'photo-missing-ids', count: badPhotos })
 
-  // 3. Settled rounds without settlement
-  const settledRounds = await rounds
-    .find({ settlementCompleted: true })
-    .project({ _id: 1 })
-    .toArray()
+  // Settled rounds without settlement — full scan cursor
+  const settledCursor = BauCuaRound.find({ settlementCompleted: true }).cursor()
   let missingSettlement = 0
-  for (const r of settledRounds) {
-    const s = await settlements.findOne({ roundId: r._id })
+  for await (const r of settledCursor) {
+    const s = await BauCuaSettlement.findOne({ roundId: r._id })
     if (!s) missingSettlement++
   }
   if (missingSettlement) {
-    findings.push({ id: 'settled-without-settlement', count: missingSettlement })
+    findings.push({
+      id: 'settled-without-settlement',
+      count: missingSettlement,
+      severity: 'error',
+    })
+    critical.push('settled-without-settlement')
   }
 
-  // 4. Idle family with activeRoundId
-  const idleActive = await familyStates
-    .find({ status: 'idle', activeRoundId: { $ne: null } })
-    .toArray()
+  const idleActive = await BauCuaFamilyState.find({
+    status: 'idle',
+    activeRoundId: { $ne: null },
+  }).lean()
   if (idleActive.length) {
     findings.push({
       id: 'idle-with-active-round',
@@ -98,106 +128,120 @@ async function main() {
     })
   }
 
-  // 5. Negative reserved
-  const negReserved = await wallets.countDocuments({ reservedBalance: { $lt: 0 } })
-  if (negReserved) findings.push({ id: 'negative-reserved', count: negReserved })
+  const negReserved = await BauCuaWallet.countDocuments({
+    reservedBalance: { $lt: 0 },
+  })
+  if (negReserved) {
+    findings.push({
+      id: 'negative-reserved',
+      count: negReserved,
+      severity: 'error',
+    })
+    critical.push('negative-reserved')
+  }
 
-  // 6. Families with 0 admins
-  const famIds = await familyMembers.distinct('familyId')
+  // Full family admin scan (cursor, not slice 500)
+  const famIds = await FamilyMember.distinct('familyId')
   let zeroAdminFamilies = 0
   for (const fid of famIds) {
-    const c = await familyMembers.countDocuments({ familyId: fid, role: 'admin' })
+    const c = await FamilyMember.countDocuments({ familyId: fid, role: 'admin' })
     if (c === 0) zeroAdminFamilies++
   }
   if (zeroAdminFamilies) {
-    findings.push({ id: 'family-zero-admin', count: zeroAdminFamilies })
+    findings.push({
+      id: 'family-zero-admin',
+      count: zeroAdminFamilies,
+      severity: 'error',
+    })
+    critical.push('family-zero-admin')
   }
 
-  // 7. System admins
-  const sysAdmins = await users.countDocuments({
+  const sysAdmins = await User.countDocuments({
     role: 'admin',
     status: { $ne: 'deleted' },
   })
   if (sysAdmins === 0) {
-    findings.push({ id: 'system-zero-admin', count: 0 })
+    findings.push({ id: 'system-zero-admin', count: 0, severity: 'error' })
+    critical.push('system-zero-admin')
   }
 
-  // 8. Raw invite codes in rate limit keys (legacy)
-  const rawInviteKeys = await rateLimits.countDocuments({
+  const rawInviteKeys = await RateLimit.countDocuments({
     key: { $regex: /^join:code:[A-Z0-9]{6,}:/ },
   })
   if (rawInviteKeys) {
     findings.push({ id: 'raw-invite-in-ratelimit', count: rawInviteKeys })
   }
 
-  // 9. Admin state drift
-  let adminDrift = 0
-  for (const fid of famIds.slice(0, 500)) {
-    const actual = await familyMembers.countDocuments({
-      familyId: fid,
-      role: 'admin',
-    })
-    const state = await familyAdminStates.findOne({ familyId: fid })
-    if (state && state.adminCount !== actual) adminDrift++
-  }
-  if (adminDrift) findings.push({ id: 'family-admin-state-drift', count: adminDrift })
+  const pendingCleanup = await StorageCleanupJob.countDocuments({
+    status: { $in: ['pending', 'processing'] },
+  })
+  findings.push({ id: 'cleanup-pending', count: pendingCleanup })
 
-  console.log(JSON.stringify({ mode, findings, sysAdmins }, null, 2))
+  console.log(
+    JSON.stringify(
+      {
+        mode,
+        strict,
+        collections: expected,
+        findings,
+        sysAdmins,
+        critical,
+      },
+      null,
+      2
+    )
+  )
 
   if (mode === 'apply') {
-    if (confirm !== 'YES') {
-      console.error('Apply requires --confirm=YES')
+    const dbName = mongoose.connection.name
+    if (confirm !== dbName && confirm !== process.env.MIGRATION_CONFIRM) {
+      console.error(
+        `Apply requires --confirm=<databaseName> matching connected DB (${dbName}) or MIGRATION_CONFIRM`
+      )
       process.exit(1)
     }
 
-    // Safe repairs only
+    // Safe repairs only: clear idle+activeRoundId when round missing or terminal+settled
     for (const s of idleActive) {
-      await familyStates.updateOne(
-        { _id: s._id },
-        { $set: { activeRoundId: null, updatedAt: new Date() } }
-      )
+      if (!s.activeRoundId) continue
+      const round = await BauCuaRound.findById(s.activeRoundId)
+      const settlement = round
+        ? await BauCuaSettlement.findOne({ roundId: round._id })
+        : null
+      const safe =
+        !round ||
+        (round.status === 'rolled' &&
+          round.settlementCompleted &&
+          settlement)
+      if (safe) {
+        await BauCuaFamilyState.updateOne(
+          { _id: s._id },
+          { $set: { activeRoundId: null, updatedAt: new Date() } }
+        )
+      } else {
+        console.warn(
+          'skip unsafe idle-activeRound repair',
+          s.familyId?.toString()
+        )
+      }
     }
 
-    // Clear passwords on deleted users
-    if (deletedWithPassword.length) {
-      await users.updateMany(
+    if (deletedWithPassword) {
+      await User.updateMany(
         { status: 'deleted', password: { $exists: true } },
         { $unset: { password: '' } }
       )
     }
 
-    // Rebuild family admin states from actual counts (idempotent)
-    for (const fid of famIds) {
-      const actual = await familyMembers.countDocuments({
-        familyId: fid,
-        role: 'admin',
-      })
-      await familyAdminStates.updateOne(
-        { familyId: fid },
-        {
-          $set: { adminCount: actual, updatedAt: new Date() },
-          $inc: { version: 1 },
-          $setOnInsert: { familyId: fid },
-        },
-        { upsert: true }
-      )
-    }
-
-    await systemAdminStates.updateOne(
-      { key: 'system-admin' },
-      {
-        $set: { adminCount: sysAdmins, updatedAt: new Date() },
-        $inc: { version: 1 },
-        $setOnInsert: { key: 'system-admin' },
-      },
-      { upsert: true }
-    )
-
-    console.log(JSON.stringify({ applied: true, repaired: findings.map((f) => f.id) }))
+    console.log(JSON.stringify({ applied: true }))
   }
 
   await mongoose.disconnect()
-  process.exit(findings.length && mode === 'audit' ? 0 : 0)
+
+  if (strict && critical.length > 0) {
+    process.exit(1)
+  }
+  process.exit(0)
 }
 
 main().catch((e) => {

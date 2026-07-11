@@ -9,10 +9,14 @@ on:
 permissions:
   contents: read
 
+env:
+  NEXTAUTH_SECRET: ci-test-secret-at-least-32-characters-long
+  NEXTAUTH_URL: http://localhost:3000
+
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,21 +36,20 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit + security tests
-        run: npm run test:unit ; npm run test:security
-        env:
-          NEXTAUTH_SECRET: ci-test-secret-at-least-32-characters-long
-          NEXTAUTH_URL: http://localhost:3000
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Security tests
+        run: npm run test:security
 
   integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     env:
-      NEXTAUTH_SECRET: ci-test-secret-at-least-32-characters-long
-      NEXTAUTH_URL: http://localhost:3000
       MONGODB_URI: mongodb://127.0.0.1:27017/tet-connect-ci?replicaSet=rs0&directConnection=true
       REQUIRE_MONGO_TRANSACTIONS: 'true'
-
+      REQUIRE_MONGO_RS: 'true'
+      CI: 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -81,10 +84,80 @@ jobs:
 
       - name: Integration tests
         run: npm run test:integration
-        env:
-          REQUIRE_MONGO_RS: 'true'
-          REQUIRE_MONGO_TRANSACTIONS: 'true'
-          MONGODB_URI: mongodb://127.0.0.1:27017/tet-connect-ci?replicaSet=rs0&directConnection=true
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      MONGODB_URI: mongodb://127.0.0.1:27017/tet-connect-e2e?replicaSet=rs0&directConnection=true
+      REQUIRE_MONGO_TRANSACTIONS: 'true'
+      CI: 'true'
+      E2E_BASE_URL: http://127.0.0.1:3000
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci --legacy-peer-deps
+
+      - name: Start MongoDB single-node replica set
+        run: |
+          docker run -d --name mongo-rs -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
+          for i in $(seq 1 40); do
+            if docker exec mongo-rs mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' 2>/dev/null | grep -q 1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec mongo-rs mongosh --quiet --eval 'try { rs.status() } catch(e) { rs.initiate({_id:"rs0", members:[{_id:0, host:"127.0.0.1:27017"}]}) }'
+          for i in $(seq 1 40); do
+            STATE=$(docker exec mongo-rs mongosh --quiet --eval 'try { rs.status().myState } catch(e) { 0 }' 2>/dev/null || echo 0)
+            if [ "$STATE" = "1" ]; then
+              echo "Replica set PRIMARY ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Production build
+        run: npm run build
+
+      - name: Start production server
+        run: |
+          npm run start > /tmp/tet-e2e.log 2>&1 &
+          echo $! > /tmp/tet-e2e.pid
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
+              echo "Server ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Server failed to become ready"
+          cat /tmp/tet-e2e.log || true
+          exit 1
+
+      - name: E2E tests
+        run: npm run test:e2e
+
+      - name: Stop server
+        if: always()
+        run: |
+          if [ -f /tmp/tet-e2e.pid ]; then kill "$(cat /tmp/tet-e2e.pid)" || true; fi
+
+      - name: Upload server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-server-logs
+          path: /tmp/tet-e2e.log
+          if-no-files-found: ignore
 
   build:
     runs-on: ubuntu-latest
@@ -105,9 +178,6 @@ jobs:
 
       - name: Production build
         run: npm run build
-        env:
-          NEXTAUTH_SECRET: ci-test-secret-at-least-32-characters-long
-          NEXTAUTH_URL: http://localhost:3000
 
   audit:
     runs-on: ubuntu-latest
@@ -126,6 +196,30 @@ jobs:
         run: npm ci --legacy-peer-deps
 
       - name: Dependency audit (high+)
-        # Fail on high/critical. Known transitive dev-only advisories may need
-        # npm audit fix; do not use || true.
         run: npm audit --audit-level=high
+
+  final-gate:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [quality, integration, e2e, build, audit]
+    steps:
+      - name: Require all jobs green
+        run: |
+          echo "quality=${{ needs.quality.result }}"
+          echo "integration=${{ needs.integration.result }}"
+          echo "e2e=${{ needs.e2e.result }}"
+          echo "build=${{ needs.build.result }}"
+          echo "audit=${{ needs.audit.result }}"
+          for r in \
+            "${{ needs.quality.result }}" \
+            "${{ needs.integration.result }}" \
+            "${{ needs.e2e.result }}" \
+            "${{ needs.build.result }}" \
+            "${{ needs.audit.result }}"
+          do
+            if [ "$r" != "success" ]; then
+              echo "final-gate FAILED: dependency result=$r"
+              exit 1
+            fi
+          done
+          echo "final-gate OK"

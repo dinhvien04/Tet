@@ -6,7 +6,9 @@ const mockConnectDB = vi.hoisted(() => vi.fn())
 const mockGenerateCode = vi.hoisted(() => vi.fn())
 const mockFamilyCreate = vi.hoisted(() => vi.fn())
 const mockMemberCreate = vi.hoisted(() => vi.fn())
-const mockFamilyDelete = vi.hoisted(() => vi.fn())
+const mockWithTx = vi.hoisted(() => vi.fn())
+const mockStateCreate = vi.hoisted(() => vi.fn())
+const mockAdminStateCreate = vi.hoisted(() => vi.fn())
 
 vi.mock('next-auth', () => ({
   getServerSession: (...a: unknown[]) => mockGetServerSession(...a),
@@ -24,10 +26,20 @@ vi.mock('@/lib/invite-code', () => ({
   generateUniqueInviteCode: (...a: unknown[]) => mockGenerateCode(...a),
 }))
 
+vi.mock('@/lib/mongo-transaction', () => ({
+  withMongoTransaction: (fn: (s: undefined) => Promise<unknown>) => mockWithTx(fn),
+  TransactionNotSupportedError: class extends Error {
+    constructor(m?: string) {
+      super(m)
+      this.name = 'TransactionNotSupportedError'
+    }
+  },
+}))
+
 vi.mock('@/lib/models/Family', () => ({
   default: {
     create: (...a: unknown[]) => mockFamilyCreate(...a),
-    findByIdAndDelete: (...a: unknown[]) => mockFamilyDelete(...a),
+    findByIdAndDelete: vi.fn(),
     findOne: vi.fn(),
   },
 }))
@@ -39,6 +51,14 @@ vi.mock('@/lib/models/FamilyMember', () => ({
   },
 }))
 
+vi.mock('@/lib/models/BauCuaFamilyState', () => ({
+  default: { create: (...a: unknown[]) => mockStateCreate(...a) },
+}))
+
+vi.mock('@/lib/models/FamilyAdminState', () => ({
+  default: { create: (...a: unknown[]) => mockAdminStateCreate(...a) },
+}))
+
 import { POST } from '@/app/api/families/route'
 
 describe('POST /api/families', () => {
@@ -46,6 +66,12 @@ describe('POST /api/families', () => {
     vi.clearAllMocks()
     mockConnectDB.mockResolvedValue({})
     mockGenerateCode.mockResolvedValue('ABCD1234')
+    mockWithTx.mockImplementation(async (fn: (s: undefined) => Promise<unknown>) =>
+      fn(undefined)
+    )
+    mockStateCreate.mockResolvedValue([{}])
+    mockAdminStateCreate.mockResolvedValue([{}])
+    mockMemberCreate.mockResolvedValue([{}])
   })
 
   it('returns 401 when not logged in', async () => {
@@ -68,15 +94,15 @@ describe('POST /api/families', () => {
     expect(res.status).toBe(400)
   })
 
-  it('creates family and admin membership', async () => {
+  it('creates family admin membership and bootstrap states', async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: 'u1' } })
-    mockFamilyCreate.mockResolvedValue({
+    const fam = {
       _id: { toString: () => 'f1' },
       name: 'Gia đình A',
       inviteCode: 'ABCD1234',
       createdAt: new Date(),
-    })
-    mockMemberCreate.mockResolvedValue({})
+    }
+    mockFamilyCreate.mockResolvedValue([fam])
 
     const req = new NextRequest('http://localhost/api/families', {
       method: 'POST',
@@ -86,7 +112,10 @@ describe('POST /api/families', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.success).toBe(true)
-    expect(body.family.invite_code).toBe('ABCD1234')
+    expect(body.family.inviteCode).toBe('ABCD1234')
+    expect(mockWithTx).toHaveBeenCalled()
     expect(mockMemberCreate).toHaveBeenCalled()
+    expect(mockStateCreate).toHaveBeenCalled()
+    expect(mockAdminStateCreate).toHaveBeenCalled()
   })
 })

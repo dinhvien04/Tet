@@ -4,12 +4,17 @@ export type StorageCleanupStatus = 'pending' | 'processing' | 'completed' | 'fai
 
 export interface IStorageCleanupJob {
   _id: mongoose.Types.ObjectId
+  /** Unique operation key for idempotent enqueue */
+  idempotencyKey: string
   type: 'cloudinary' | 'local'
   publicId: string
   userId?: mongoose.Types.ObjectId | null
   photoId?: mongoose.Types.ObjectId | null
   attempts: number
   status: StorageCleanupStatus
+  leaseId?: string | null
+  leaseExpiresAt?: Date | null
+  processingStartedAt?: Date | null
   lastError?: string | null
   nextRetryAt: Date
   createdAt: Date
@@ -18,6 +23,12 @@ export interface IStorageCleanupJob {
 
 const StorageCleanupJobSchema = new Schema<IStorageCleanupJob>(
   {
+    idempotencyKey: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+    },
     type: {
       type: String,
       enum: ['cloudinary', 'local'],
@@ -33,16 +44,13 @@ const StorageCleanupJobSchema = new Schema<IStorageCleanupJob>(
       default: 'pending',
       index: true,
     },
+    leaseId: { type: String, default: null },
+    leaseExpiresAt: { type: Date, default: null },
+    processingStartedAt: { type: Date, default: null },
     lastError: { type: String, default: null },
-    nextRetryAt: { type: Date, default: () => new Date() },
+    nextRetryAt: { type: Date, default: () => new Date(), index: true },
   },
   { timestamps: true }
-)
-
-// Deduplicate pending jobs for same publicId
-StorageCleanupJobSchema.index(
-  { publicId: 1, status: 1 },
-  { partialFilterExpression: { status: 'pending' } }
 )
 
 const StorageCleanupJob: Model<IStorageCleanupJob> =
