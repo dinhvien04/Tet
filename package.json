@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:unit": "vitest run --exclude 'tests/**/*integration*.test.*' --exclude 'tests/**/*concurrency*.test.*' --exclude 'tests/legacy-supabase/**'",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:security": "vitest run tests/safe-redirect.test.ts tests/cron-auth.test.ts tests/ai-generate-security.test.ts tests/sw-privacy.test.ts tests/join-invite-required.test.ts tests/profile-delete-api.test.ts tests/image-process.test.ts tests/photos-upload-api.test.ts tests/posts-events-validate-api.test.ts tests/validate-api.test.ts tests/security-headers.test.ts tests/pagination.test.ts tests/protected-routes.test.ts tests/session-version.test.ts tests/delete-cascade.test.ts",
+    "test:security": "vitest run tests/safe-redirect.test.ts tests/cron-auth.test.ts tests/ai-generate-security.test.ts tests/sw-privacy.test.ts tests/join-invite-required.test.ts tests/profile-delete-api.test.ts tests/image-process.test.ts tests/photos-upload-api.test.ts tests/posts-events-validate-api.test.ts tests/validate-api.test.ts tests/security-headers.test.ts tests/pagination.test.ts tests/protected-routes.test.ts tests/session-version.test.ts tests/delete-cascade.test.ts tests/audit-and-request-id.test.ts",
     "test:ci": "npm run test:unit && npm run test:security && npm run test:integration",
     "test:e2e": "vitest run tests/protected-routes.test.ts tests/e2e-protected-routes.test.ts tests/session-version.test.ts",
     "test:legacy": "vitest run tests/legacy-supabase --config vitest.legacy.config.ts",

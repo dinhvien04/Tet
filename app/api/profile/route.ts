@@ -325,9 +325,13 @@ export async function DELETE(request: NextRequest) {
       }
     }
 
-    console.log('[audit] account.deleted', {
-      userId: sessionUser.id,
-      cleanupJobs: photoPublicIds.length,
+    const { writeAuditEvent } = await import('@/lib/audit')
+    await writeAuditEvent({
+      actorId: sessionUser.id,
+      action: 'account.deleted',
+      targetType: 'user',
+      targetId: sessionUser.id,
+      metadata: { cleanupJobs: photoPublicIds.length },
     })
 
     return NextResponse.json({

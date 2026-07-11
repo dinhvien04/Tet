@@ -145,11 +145,14 @@ export async function PATCH(
       }
     }
 
-    console.log('[audit] join_request.' + action, {
-      familyId,
-      requestId,
+    const { writeAuditEvent } = await import('@/lib/audit')
+    await writeAuditEvent({
       actorId: admin.user.id,
-      targetUserId: updated.userId.toString(),
+      familyId: familyId.toString(),
+      action: `join_request.${action}`,
+      targetType: 'join_request',
+      targetId: requestId,
+      metadata: { targetUserId: updated.userId.toString() },
     })
 
     return NextResponse.json({

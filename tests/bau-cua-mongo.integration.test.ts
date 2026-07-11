@@ -225,8 +225,6 @@ describeIf('Bau Cua Mongo replica-set concurrency', () => {
   })
 
   it('requireReplicaSet throws TransactionNotSupportedError when forced unsupported', async () => {
-    // Unit-level: operation with requireReplicaSet always attempts check
-    // Here we only assert class exists when RS available transactions work
     const supported = await supportsMongoTransactions()
     if (supported) {
       await expect(
@@ -237,5 +235,275 @@ describeIf('Bau Cua Mongo replica-set concurrency', () => {
         withMongoTransaction(async () => 1, { requireReplicaSet: true })
       ).rejects.toBeInstanceOf(TransactionNotSupportedError)
     }
+  })
+
+  it('20 concurrent BET reservations never exceed wallet balance', async () => {
+    const supported = await supportsMongoTransactions()
+    if (!supported) return
+
+    await BauCuaFamilyState.deleteMany({ familyId })
+    await BauCuaRound.deleteMany({ familyId })
+    await BauCuaBet.deleteMany({ familyId })
+    await BauCuaWallet.deleteMany({ familyId })
+
+    const [round] = await BauCuaRound.create([
+      {
+        familyId,
+        roundNumber: 10,
+        status: 'betting',
+        hostUserId: userA,
+        settlementCompleted: false,
+        startedAt: new Date(),
+      },
+    ])
+    await BauCuaFamilyState.create({
+      familyId,
+      activeRoundId: round._id,
+      status: 'betting',
+      version: 1,
+      betRevision: 0,
+    })
+    await BauCuaWallet.create({
+      familyId,
+      userId: userB,
+      balance: 1000,
+      reservedBalance: 0,
+    })
+
+    const amount = 100
+    // 20 bets of 100 = 2000 > balance 1000 → at most 10 succeed
+    const results = await Promise.allSettled(
+      Array.from({ length: 20 }, (_, i) =>
+        withMongoTransaction(
+          async (session) => {
+            const opt = session ? { session } : {}
+            const state = await BauCuaFamilyState.findOneAndUpdate(
+              { familyId, status: 'betting', activeRoundId: round._id },
+              { $inc: { betRevision: 1 } },
+              { new: true, ...opt }
+            )
+            if (!state) throw new Error('not betting')
+            const wallet = await BauCuaWallet.findOneAndUpdate(
+              {
+                familyId,
+                userId: userB,
+                $expr: {
+                  $gte: [{ $subtract: ['$balance', '$reservedBalance'] }, amount],
+                },
+              },
+              { $inc: { reservedBalance: amount } },
+              { new: true, ...opt }
+            )
+            if (!wallet) throw new Error('insufficient')
+            await BauCuaBet.create(
+              [
+                {
+                  roundId: round._id,
+                  familyId,
+                  userId: userB,
+                  item: 'bau',
+                  amount,
+                  idempotencyKey: `parallel-${i}`,
+                },
+              ],
+              session ? { session } : undefined
+            )
+            return true
+          },
+          { requireReplicaSet: true }
+        )
+      )
+    )
+
+    const ok = results.filter((r) => r.status === 'fulfilled').length
+    expect(ok).toBeLessThanOrEqual(10)
+    expect(ok).toBeGreaterThan(0)
+
+    const wallet = await BauCuaWallet.findOne({ familyId, userId: userB })
+    expect(wallet!.reservedBalance).toBeLessThanOrEqual(1000)
+    expect(wallet!.reservedBalance).toBe(ok * amount)
+    expect(wallet!.reservedBalance).toBeGreaterThanOrEqual(0)
+
+    const betCount = await BauCuaBet.countDocuments({ roundId: round._id })
+    expect(betCount).toBe(ok)
+  })
+
+  it('two concurrent ROLL CAS produce one settlement at most', async () => {
+    const supported = await supportsMongoTransactions()
+    if (!supported) return
+
+    await BauCuaFamilyState.deleteMany({ familyId })
+    await BauCuaRound.deleteMany({ familyId })
+    await BauCuaSettlement.deleteMany({ familyId })
+
+    const [round] = await BauCuaRound.create([
+      {
+        familyId,
+        roundNumber: 20,
+        status: 'betting',
+        hostUserId: userA,
+        settlementCompleted: false,
+        startedAt: new Date(),
+      },
+    ])
+    await BauCuaFamilyState.create({
+      familyId,
+      activeRoundId: round._id,
+      status: 'betting',
+      version: 1,
+      betRevision: 0,
+    })
+
+    async function claimRoll() {
+      return withMongoTransaction(
+        async (session) => {
+          const opt = session ? { session } : {}
+          const state = await BauCuaFamilyState.findOneAndUpdate(
+            { familyId, status: 'betting' },
+            { $set: { status: 'rolling' }, $inc: { version: 1 } },
+            { new: true, ...opt }
+          )
+          if (!state) throw new Error('lost race')
+          const existing = await BauCuaSettlement.findOne({ roundId: round._id }, null, opt)
+          if (existing) return 'existing'
+          await BauCuaSettlement.create(
+            [
+              {
+                roundId: round._id,
+                familyId,
+                diceResults: ['bau', 'cua', 'tom'],
+                entries: [],
+                status: 'completed',
+                createdAt: new Date(),
+                completedAt: new Date(),
+              },
+            ],
+            session ? { session } : undefined
+          )
+          await BauCuaRound.findOneAndUpdate(
+            { _id: round._id },
+            {
+              $set: {
+                status: 'rolled',
+                settlementCompleted: true,
+                diceResults: ['bau', 'cua', 'tom'],
+              },
+            },
+            opt
+          )
+          await BauCuaFamilyState.findOneAndUpdate(
+            { familyId },
+            { $set: { status: 'idle', activeRoundId: null }, $inc: { version: 1 } },
+            opt
+          )
+          return 'created'
+        },
+        { requireReplicaSet: true }
+      )
+    }
+
+    const outcomes = await Promise.allSettled([claimRoll(), claimRoll()])
+    const created = outcomes.filter(
+      (o) => o.status === 'fulfilled' && o.value === 'created'
+    ).length
+    expect(created).toBeLessThanOrEqual(1)
+
+    const settlements = await BauCuaSettlement.countDocuments({ roundId: round._id })
+    expect(settlements).toBeLessThanOrEqual(1)
+  })
+
+  it('duplicate idempotency key does not double-reserve', async () => {
+    const supported = await supportsMongoTransactions()
+    if (!supported) return
+
+    await BauCuaFamilyState.deleteMany({ familyId })
+    await BauCuaRound.deleteMany({ familyId })
+    await BauCuaBet.deleteMany({ familyId })
+    await BauCuaWallet.deleteMany({ familyId })
+
+    const [round] = await BauCuaRound.create([
+      {
+        familyId,
+        roundNumber: 30,
+        status: 'betting',
+        hostUserId: userA,
+        settlementCompleted: false,
+        startedAt: new Date(),
+      },
+    ])
+    await BauCuaFamilyState.create({
+      familyId,
+      activeRoundId: round._id,
+      status: 'betting',
+      version: 1,
+      betRevision: 0,
+    })
+    await BauCuaWallet.create({
+      familyId,
+      userId: userB,
+      balance: 1000,
+      reservedBalance: 0,
+    })
+
+    async function place(key: string) {
+      return withMongoTransaction(
+        async (session) => {
+          const opt = session ? { session } : {}
+          const existing = await BauCuaBet.findOne(
+            { roundId: round._id, userId: userB, idempotencyKey: key },
+            null,
+            opt
+          )
+          if (existing) return 'idempotent'
+          await BauCuaFamilyState.findOneAndUpdate(
+            { familyId, status: 'betting' },
+            { $inc: { betRevision: 1 } },
+            opt
+          )
+          const wallet = await BauCuaWallet.findOneAndUpdate(
+            {
+              familyId,
+              userId: userB,
+              $expr: {
+                $gte: [{ $subtract: ['$balance', '$reservedBalance'] }, 50],
+              },
+            },
+            { $inc: { reservedBalance: 50 } },
+            { new: true, ...opt }
+          )
+          if (!wallet) throw new Error('insufficient')
+          try {
+            await BauCuaBet.create(
+              [
+                {
+                  roundId: round._id,
+                  familyId,
+                  userId: userB,
+                  item: 'cua',
+                  amount: 50,
+                  idempotencyKey: key,
+                },
+              ],
+              session ? { session } : undefined
+            )
+          } catch (e: unknown) {
+            const err = e as { code?: number }
+            if (err.code === 11000) throw e // abort TX — do not continue
+            throw e
+          }
+          return 'created'
+        },
+        { requireReplicaSet: true }
+      )
+    }
+
+    const first = await place('same-key')
+    expect(first).toBe('created')
+    const second = await place('same-key')
+    expect(second).toBe('idempotent')
+
+    const wallet = await BauCuaWallet.findOne({ familyId, userId: userB })
+    expect(wallet?.reservedBalance).toBe(50)
+    expect(await BauCuaBet.countDocuments({ roundId: round._id })).toBe(1)
   })
 })

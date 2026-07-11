@@ -16,6 +16,9 @@
 - Event/post delete cascade (tasks/RSVP/comments/reactions/notifications) in TX
 - Cron `/api/cron/storage-cleanup`; middleware skips all `/api/*`
 - Real RS integration tests (skip without Mongo); E2E protected routes when `E2E_BASE_URL` set
+- Structured `AuditEvent` + `writeAuditEvent`; middleware `X-Request-Id`
+- Expanded Bau Cua RS concurrency scenarios (20 BET, dual ROLL, idempotency)
+- `docs/SECURITY_AUDIT_ALLOWLIST.md` for residual moderate advisories
 
 ### P0 — Security & correctness
 - NextAuth JWT làm nguồn session; bỏ MongoDBAdapter; secret fail-safe production

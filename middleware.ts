@@ -1,10 +1,14 @@
 import { withAuth } from 'next-auth/middleware'
 import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
 import { applySecurityHeaders } from '@/lib/security-headers'
+import { getOrCreateRequestId, REQUEST_ID_HEADER } from '@/lib/request-id'
 
 export default withAuth(
-  function middleware() {
+  function middleware(req: NextRequest) {
+    const requestId = getOrCreateRequestId(req)
     const res = NextResponse.next()
+    res.headers.set(REQUEST_ID_HEADER, requestId)
     // CSP enforced by default; set CSP_REPORT_ONLY=true to measure only
     return applySecurityHeaders(res, {
       production: process.env.NODE_ENV === 'production',

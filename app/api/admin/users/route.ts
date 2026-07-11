@@ -179,12 +179,13 @@ export async function PATCH(request: NextRequest) {
       throw error
     }
 
-    console.log('[audit] admin.role_change', {
+    const { writeAuditEvent } = await import('@/lib/audit')
+    await writeAuditEvent({
       actorId: admin.id,
-      targetUserId: userId,
-      from: previousRole,
-      to: role,
-      at: new Date().toISOString(),
+      action: 'admin.role_change',
+      targetType: 'user',
+      targetId: userId,
+      metadata: { from: previousRole, to: role },
     })
 
     return NextResponse.json({
