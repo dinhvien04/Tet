@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 
@@ -22,7 +22,7 @@ export function EventRsvp({ eventId }: EventRsvpProps) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const res = await fetch(`/api/events/${eventId}/rsvp`)
       const data = await res.json()
@@ -34,11 +34,11 @@ export function EventRsvp({ eventId }: EventRsvpProps) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [eventId])
 
   useEffect(() => {
-    load()
-  }, [eventId])
+    void load()
+  }, [load])
 
   const setStatus = async (status: RsvpStatus) => {
     setSaving(true)
